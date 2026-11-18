@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Diamond
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
@@ -99,11 +100,11 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, onBack: () -> Unit) {
     }
     DisposableEffect(Unit) { onDispose { vm.voice.stopSpeaking() } }
 
-    val back: () -> Unit = { saveAll(); if (page != null) page = null else onBack() }
+    val back: () -> Unit = { saveAll(); if (page == "hf") page = "models" else if (page != null) page = null else onBack() }
     BackHandler { back() }
 
     val title = when (page) {
-        "nano" -> "Gemini Nano"; "gemma" -> "Gemma 4 E2B"; "claude" -> "Claude (online)"; "github" -> "GitHub"
+        "nano" -> "Gemini Nano"; "models" -> "KI-Modelle"; "hf" -> "Hugging Face"; "claude" -> "Claude (online)"; "github" -> "GitHub"
         "sender" -> "Absender & Unterschrift"; "voice" -> "Stimme"; "brief" -> "Tagesstart"
         "system" -> "Systemanweisung"; "memory" -> "Gedächtnis"; "report" -> "Fehlerbericht"
         else -> "Einstellungen"
@@ -116,7 +117,9 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, onBack: () -> Unit) {
                 Spacer(Modifier.width(4.dp))
                 Text(title, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1)
             }
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+            // The Hugging Face browser needs the whole height (a web page scrolls itself).
+            if (page == "hf") Box(Modifier.weight(1f).fillMaxWidth()) { HfBrowser(vm, ui, onDone = { page = "models" }) }
+            else Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                 Column(
                     Modifier.widthIn(max = 720.dp).fillMaxWidth().verticalScroll(rememberScrollState())
                         .padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 24.dp),
@@ -124,7 +127,7 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, onBack: () -> Unit) {
                     when (page) {
                         null -> Overview(vm, ui, key, model, ghToken, stReady, stVoice, rate, system) { page = it }
                         "nano" -> NanoPage(vm, ui)
-                        "gemma" -> Group { Column(Modifier.padding(16.dp)) { GemmaSettings(vm, ui) } }
+                        "models" -> ModelSettings(vm, ui, openBrowser = { page = "hf" }, openNano = { page = "nano" })
                                                 "github" -> GitHubPage(vm, ghToken, { ghToken = it })
                         "sender" -> Group { Column(Modifier.padding(12.dp)) { SenderProfilesList(vm, onEdit = { editProfile = it }) } }
                         "voice" -> VoicePage(vm, stStatus, stBusy, stReady, stVoice, { stVoice = it }, rate, { rate = it })
@@ -166,24 +169,20 @@ private fun Overview(
 
     SectionLabel("KI-Modelle")
     Group {
-        SettingRow("Gemini Nano", "Standard · offline", leading = { Tile(Icons.Default.PhoneAndroid, FK.T1) }, onClick = { open("nano") }) {
-            if (ui.nanoReady) Tag("bereit", on = true) else Tag(if (ui.nanoDownloadable) "laden" else "prüfen")
+        SettingRow(
+            "Modell",
+            ui.activeName + when {
+                ui.modelOp is LocalModelManager.State.Downloading -> " · lädt … ${(ui.modelOp as LocalModelManager.State.Downloading).pct} %"
+                ui.localModels.isEmpty() -> " · noch keins geladen"
+                else -> " · ${ui.localModels.size} auf dem Handy"
+            },
+            leading = { Tile(Icons.Default.Diamond, FK.T3) }, onClick = { open("models") },
+        ) {
+            if (ui.modelReady) Tag("bereit", on = true) else Chevron()
         }
         GroupDivider()
-        val g = ui.gemma
-        SettingRow(
-            "Gemma 4 E2B",
-            when (g) {
-                LocalModelManager.State.Ready -> "heruntergeladen · " + if (ui.gemmaEnabled) "an" else "aus"
-                is LocalModelManager.State.Downloading -> "lädt … ${g.pct} %"
-                is LocalModelManager.State.Verifying -> "prüft … ${g.pct} %"
-                is LocalModelManager.State.Failed -> "Fehler – Nano antwortet"
-                LocalModelManager.State.NotDownloaded -> "nicht geladen · ${LocalModelManager.gb(LocalModelManager.SIZE)}"
-            },
-            leading = { Tile(Icons.Default.Diamond, FK.T3) }, onClick = { open("gemma") },
-        ) {
-            if (g == LocalModelManager.State.Ready) FkToggle(ui.gemmaEnabled, { vm.setGemmaEnabled(it) }) else Chevron()
-        }
+        SettingRow("Gemini Nano", if (ui.usesNano) "gewählt · im Handy eingebaut" else "im Handy eingebaut · nur wenn gewählt",
+            leading = { Tile(Icons.Default.PhoneAndroid, FK.T1) }, onClick = { open("nano") })
     }
 
     SectionLabel("Zugänge")
@@ -201,6 +200,12 @@ private fun Overview(
 
     SectionLabel("Briefe & Stimme")
     Group {
+        SettingRow(
+            "Briefe",
+            if (ui.letters) "An: Brief- und PDF-Regeln und das Datum gehen mit" else "Aus: es wird nichts vorgeladen",
+            leading = { Tile(Icons.Default.MailOutline, FK.T5) },
+        ) { FkToggle(ui.letters, { vm.setLetters(it) }) }
+        GroupDivider()
         SettingRow("Absender & Unterschrift", if (list.size == 1) "1 Profil" else "${list.size} Profile",
             leading = { Tile(Icons.Default.Draw, FK.T5) }, onClick = { open("sender") })
         GroupDivider()
@@ -268,9 +273,12 @@ fun FkField(label: String, value: String, onChange: (String) -> Unit, password: 
 private fun NanoPage(vm: ChatViewModel, ui: UiState) {
     PageHeader(
         Icons.Default.PhoneAndroid, FK.T1, if (ui.nanoReady) "Bereit" else ui.nanoStatus,
-        "Gemini Nano läuft auf dem Handy und ist immer Standard und Ersatz, auch wenn Gemma eingeschaltet ist.",
+        "Gemini Nano steckt im Handy (AICore). Es antwortet nur, wenn du es auswählst – es springt nie für ein anderes Modell ein.",
     )
-    if (!ui.nanoReady) {
+    Spacer(Modifier.height(14.dp))
+    if (!ui.usesNano) FkButton("Gemini Nano auswählen") { vm.selectModel(Settings.NANO) }
+    else if (ui.nanoReady) Note("Gemini Nano ist ausgewählt.", Modifier.padding(horizontal = 6.dp))
+    if (ui.usesNano && !ui.nanoReady) {
         Spacer(Modifier.height(14.dp))
         if (ui.nanoDownloadable) FkButton("Gemini Nano herunterladen") { vm.downloadNano() }
         else FkButton("Erneut prüfen", ghost = true) { vm.checkNano() }
@@ -307,7 +315,7 @@ private fun GitHubPage(vm: ChatViewModel, token: String, setToken: (String) -> U
     PageHeader(
         Icons.Default.Code, FK.T6,
         when { token.isBlank() -> "Nicht verbunden"; login.isNotBlank() -> "Verbunden als $login"; else -> "Token eingetragen – noch nicht geprüft" },
-        "Gemma 4 E2B kann auf deinem Handy suchen, Code lesen, Repos anlegen, committen und Builds starten. Jede Änderung zeigt die App dir vorher.",
+        "Das gewählte Modell kann auf deinem Handy suchen, Code lesen, Repos anlegen, committen und Builds starten. Jede Änderung zeigt die App dir vorher.",
     )
     SectionLabel("Zugang")
     Group {
@@ -331,7 +339,7 @@ private fun GitHubPage(vm: ChatViewModel, token: String, setToken: (String) -> U
     Note(
         "Token anlegen: github.com → Settings → Developer settings → Personal access tokens. Rechte: Contents, Pull requests, " +
             "Issues, Actions, Workflows (Lesen und Schreiben), Administration (zum Anlegen von Repos). " +
-            "Fold KI arbeitet dafür mit Gemma 4 E2B auf dem Handy – Gemma muss geladen sein. Kein weiterer Schlüssel nötig.",
+            "Fold KI arbeitet dafür mit dem gewählten heruntergeladenen Modell auf dem Handy (nicht mit Nano). Kein weiterer Schlüssel nötig.",
         Modifier.padding(start = 14.dp, end = 14.dp, top = 12.dp),
     )
 }
@@ -397,7 +405,7 @@ private fun SystemPage(system: String, setSystem: (String) -> Unit) {
 private fun MemoryPage(vm: ChatViewModel) {
     val mem by vm.memories.collectAsStateWithLifecycle()
     Note(
-        "Was die KI über dich weiß – gilt in allen Chats (nur Nano/Gemma, bleibt auf dem Handy). Sag im Chat z. B. „Merk dir: …“ oder „Ich heiße …“.",
+        "Was du der KI gesagt hast („Merk dir: …“, „Ich heiße …“). Bleibt auf dem Handy. Zurzeit wird es nicht an die KI geschickt – es gehen keine eingebauten Texte mit.",
         Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
     )
     if (mem.isNotEmpty()) {

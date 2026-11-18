@@ -80,7 +80,35 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("gemma_enabled", false)
         set(v) = prefs.edit().putBoolean("gemma_enabled", v).apply()
 
-    /** "GPU" (try GPU first, then CPU) or "CPU" (GPU failed or crashed before). */
+    /**
+     * Model that answers: [NANO] (Gemini Nano in the phone), the file name of a downloaded .litertlm model, or "" (none).
+     * Nothing ever answers in place of the chosen model. First start: Gemma if it was in use before, else none.
+     */
+    var activeModel: String
+        get() = prefs.getString("active_model", null) ?: (if (gemmaEnabled) de.foldki.app.ai.LocalModelManager.GEMMA_FILE else "")
+        set(v) = prefs.edit().putString("active_model", v).apply()
+
+    /** Switch "Briefe": only then the letter/PDF rules and today's date go to the model. Off = nothing is added. */
+    var letters: Boolean
+        get() = prefs.getBoolean("letters", false)
+        set(v) = prefs.edit().putBoolean("letters", v).apply()
+
+    /** Crash guard: true while a local model loads or answers (commit = on disk before native code runs). */
+    var llmLoading: Boolean
+        get() = prefs.getBoolean("llm_loading", false)
+        set(v) { prefs.edit().putBoolean("llm_loading", v).commit() }
+
+    /** Model file that was loading/answering when [llmLoading] was set. */
+    var llmAttempt: String
+        get() = prefs.getString("llm_attempt", "") ?: ""
+        set(v) { prefs.edit().putString("llm_attempt", v).commit() }
+
+    /** Model file that crashed the app: not loaded again until the user selects it again. */
+    var llmCrashed: String
+        get() = prefs.getString("llm_crashed", "") ?: ""
+        set(v) { prefs.edit().putString("llm_crashed", v).commit() }
+
+    /** "GPU" (try GPU first, then CPU) or "CPU" (test switch "Auf CPU rechnen"). Used for every local model. */
     var gemmaBackend: String
         get() = prefs.getString("gemma_backend", "GPU") ?: "GPU"
         set(v) = prefs.edit().putString("gemma_backend", v).apply()
@@ -167,6 +195,8 @@ class Settings(context: Context) {
     }
 
     companion object {
+        /** [activeModel] value for Gemini Nano. */
+        const val NANO = "nano"
         const val DEFAULT_MODEL = "claude-opus-5-5"
         val MODELS = listOf(
             "claude-opus-5-5" to "Claude Opus 5.5 (stärkstes)",

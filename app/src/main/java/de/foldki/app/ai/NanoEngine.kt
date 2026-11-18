@@ -75,6 +75,9 @@ class NanoEngine {
         }.trim()
     }
 
+    /** One prompt, whole answer (internal tasks like search terms or reading a letter). */
+    suspend fun ask(prompt: String): String = complete(prompt)
+
     private suspend fun complete(prompt: String): String {
         val sb = StringBuilder()
         model.generateContentStream(prompt).collect { sb.append(it.candidates.firstOrNull()?.text.orEmpty()) }
@@ -132,9 +135,9 @@ Erfinde nichts, keine Listen, keine Begrüßungsfloskeln, kein Markdown."""
         val noText = history.flatMap { it.attachments }.filter { it.text.isBlank() }
 
         return buildString {
-            append(system).append("\n\n")
+            if (system.isNotBlank()) append(system).append("\n\n")
             if (docs.isNotEmpty()) append("Inhalt der angehängten Dateien:\n").append(docs)
-            if (web.isNotBlank()) append("Ergebnisse einer Internetsuche (nutze sie für deine Antwort und nenne die Quelle, z. B. Wikipedia):\n")
+            if (web.isNotBlank()) append("Internetsuche:\n")
                 .append(web.take(if (large) 6000 else 3000)).append("\n\n")
             if (noText.isNotEmpty()) append("(Aus ${noText.joinToString { it.name }} konnte kein Text gelesen werden.)\n\n")
             lines.forEach { append(it).append("\n") }

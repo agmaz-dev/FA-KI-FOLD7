@@ -342,15 +342,9 @@ private fun Sidebar(ui: UiState, vm: ChatViewModel, onSettings: () -> Unit, onPi
 /** Unfolded only: button that closes/opens the chat list pane. */
 private class SidebarToggle(val open: Boolean, val toggle: () -> Unit)
 
-private fun modelName(ui: UiState): String = when (ui.engine) {
-    Engine.CLAUDE -> Settings.MODELS.firstOrNull { it.first == ui.model }?.second?.substringBefore(" (") ?: ui.model
-    else -> if (ui.gemmaActive) "Gemma 4 E2B" else "Gemini Nano"
-}
+private fun modelName(ui: UiState): String = ui.activeName
 
-private fun modelReady(ui: UiState): Boolean = when (ui.engine) {
-    Engine.CLAUDE -> ui.apiKeySet
-    else -> if (ui.gemmaActive) true else ui.nanoReady
-}
+private fun modelReady(ui: UiState): Boolean = ui.modelReady
 
 @Composable
 private fun TopBar(ui: UiState, showMenu: Boolean, onMenu: () -> Unit, sidebar: SidebarToggle?, onModel: () -> Unit, onNew: () -> Unit) {
@@ -389,19 +383,17 @@ private fun ModelSheet(ui: UiState, vm: ChatViewModel, onDismiss: () -> Unit, on
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), dragHandle = { Grab() },
     ) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 24.dp).navigationBarsPadding()) {
-            SheetTitle("Modell wählen", "Beide Modelle laufen offline – alles bleibt auf dem Handy.")
+            SheetTitle("Modell wählen", "Alle Modelle laufen offline – alles bleibt auf dem Handy. Es antwortet nur das gewählte Modell.")
             SectionLabel("Auf dem Gerät", Modifier.offset(y = (-14).dp))
-            val nanoSel = ui.engine == Engine.NANO && !ui.gemmaActive
-            ModelOption(Icons.Default.PhoneAndroid, FK.T1, "Gemini Nano", "Standard · offline · schnell", nanoSel) {
-                if (ui.gemmaEnabled) vm.setGemmaEnabled(false)
-                vm.setEngine(Engine.NANO); onDismiss()
+            ui.localModels.forEach { m ->
+                ModelOption(Icons.Default.Diamond, FK.T3, m.name, LocalModelManager.gb(m.size) + " · LiteRT-LM · GPU", ui.activeModel == m.file) {
+                    vm.selectModel(m.file); onDismiss()
+                }
             }
-            val gReady = ui.gemma == LocalModelManager.State.Ready
-            ModelOption(Icons.Default.Diamond, FK.T3, "Gemma 4 E2B", "offline · längere Texte · GitHub", ui.engine == Engine.NANO && ui.gemmaActive,
-                tag = if (gReady) "bereit" else "nicht geladen", tagOn = gReady) {
-                if (gReady) { vm.setGemmaEnabled(true); vm.setEngine(Engine.NANO); onDismiss() }
-                else { vm.notify("Gemma zuerst unter Einstellungen → Gemma 4 E2B laden"); onDismiss(); onSettings() }
+            ModelOption(Icons.Default.PhoneAndroid, FK.T1, "Gemini Nano", "im Handy eingebaut (AICore)", ui.usesNano) {
+                vm.selectModel(Settings.NANO); onDismiss()
             }
+            FkButton("Modelle herunterladen & verwalten", ghost = true) { onDismiss(); onSettings() }
         }
     }
 }
@@ -477,16 +469,16 @@ private fun StartScreen(ui: UiState, vm: ChatViewModel, onSettings: () -> Unit, 
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                modelName(ui) + if (ui.engine == Engine.CLAUDE) " · online" else " · offline auf deinem Fold",
+                modelName(ui) + if (ui.activeModel.isBlank()) "" else " · offline auf deinem Fold",
                 fontSize = 14.sp, color = FK.Muted, textAlign = TextAlign.Center,
             )
-            if (ui.engine == Engine.NANO && !ui.gemmaActive && !ui.nanoReady) {
+            if (ui.usesNano && !ui.nanoReady) {
                 Spacer(Modifier.height(8.dp))
                 Note(ui.nanoStatus)
                 if (ui.nanoDownloadable) TextButton(onClick = { vm.downloadNano() }) { Text("Gemini Nano herunterladen", color = FK.Accent) }
                 else TextButton(onClick = { vm.checkNano() }) { Text("Erneut prüfen", color = FK.Accent) }
-            } else if (ui.engine == Engine.CLAUDE && !ui.apiKeySet) {
-                TextButton(onClick = onSettings) { Text("API-Schlüssel eintragen", color = FK.Accent) }
+            } else if (!ui.modelReady) {
+                TextButton(onClick = onSettings) { Text("Modell wählen oder herunterladen", color = FK.Accent) }
             }
             Spacer(Modifier.height(36.dp))
             Column(Modifier.widthIn(max = 560.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -640,7 +632,8 @@ private fun ChatScreen(
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
                 ) {
                     items(messages, key = { it.id }) { m ->
-                        MessageRow(m, typing = ui.generating && m === messages.last() && m.role == Role.ASSISTANT, actions = actions)
+                        val typing = ui.generating && m === messages.last() && m.role == Role.ASSISTANT
+                        MessageRow(m, typing = typing, actions = actions, liveCpu = if (typing) ui.liveCpu else -1)
                     }
                 }
             }
@@ -734,7 +727,7 @@ private fun BigTile(icon: ImageVector, label: String, modifier: Modifier, onClic
 // ---------------------------------------------------------------- Messages (image 6)
 
 @Composable
-private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions) {
+private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions, liveCpu: Int = -1) {
     if (m.role == Role.USER) {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
             Column(
@@ -769,15 +762,20 @@ private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions)
                     Text(
                         when (m.engine) {
                             Engine.NANO -> "Gemini Nano · " + if (m.web) "Web" else "offline"
-                            Engine.GEMMA -> "Gemma 4 E2B · " + if (m.web) "Web" else "offline"
+                            Engine.GEMMA -> (m.model ?: "Gemma 4 E2B") + " · " + if (m.web) "Web" else "offline"
                             else -> "Claude · online" + if (m.web) " · Websuche" else ""
                         },
-                        fontSize = 12.sp, color = FK.Muted,
+                        fontSize = 12.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
+            val stillThinking = typing && m.text.isEmpty() && m.thoughts.isNotEmpty()
+            if (m.thoughts.isNotEmpty()) Thoughts(m.thoughts, stillThinking, liveCpu)
             if (doc == null) {
-                AnswerText(textColor, if (m.text.isEmpty() && typing) (if (m.web) "Suche im Internet…" else "…") else clean)
+                if (!stillThinking) AnswerText(
+                    textColor,
+                    if (m.text.isEmpty() && typing) (if (m.web) "Suche im Internet…" else "…" + if (liveCpu >= 0) "  CPU $liveCpu %" else "") else clean,
+                )
             } else {
                 if (parts.before.isNotBlank()) AnswerText(textColor, DocumentParser.clean(parts.before))
                 val shape = RoundedCornerShape(14.dp)
@@ -797,6 +795,7 @@ private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions)
                 if (parts.after.isNotBlank()) AnswerText(textColor, DocumentParser.clean(parts.after))
             }
             m.attachments.forEach { a -> DocCard(a, actions) }
+            if (!typing && (m.tokens > 0 || m.answerMs > 0)) AnswerStats(m)
             if (!typing && !m.isError && m.text.isNotBlank()) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp).offset(x = (-10).dp)) {
                     SmallAction(Icons.Default.ContentCopy, "Kopieren") { actions.copy(clean) }
@@ -806,6 +805,45 @@ private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions)
                     SmallAction(Icons.Default.Share, "Teilen") { actions.sharePdf(exportText) }
                 }
             }
+        }
+    }
+}
+
+/** Small line under an answer: where it ran, CPU load, tokens, time, speed (only shown, never exported or spoken). */
+@Composable
+private fun AnswerStats(m: ChatMessage) {
+    val de = java.util.Locale.GERMANY
+    val parts = buildList {
+        if (m.backend.isNotBlank()) add(m.backend)
+        if (m.cpuPct >= 0) add("CPU ${m.cpuPct} %")
+        if (m.tokens > 0) add("%,d Tokens".format(de, m.tokens))
+        if (m.answerMs > 0) add("%.1f s".format(de, m.answerMs / 1000.0))
+        if (m.tokPerSec > 0f) add("%.1f Tokens/s".format(de, m.tokPerSec))
+    }
+    Text(parts.joinToString(" · "), fontSize = 11.sp, color = FK.Muted, maxLines = 2, modifier = Modifier.padding(top = 6.dp))
+}
+
+/** "Gedanken" of a thinking model: collapsed by default, tap to expand (only shown, never exported or spoken). */
+@Composable
+private fun Thoughts(text: String, thinking: Boolean, liveCpu: Int) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    Row(
+        Modifier.padding(bottom = 6.dp).clip(RoundedCornerShape(20.dp)).background(FK.Surface).clickable { open = !open }
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(if (thinking) "Denkt nach…" else "Gedanken", fontSize = 12.sp, color = FK.Muted)
+        if (thinking && liveCpu >= 0) { Spacer(Modifier.width(8.dp)); Text("CPU $liveCpu %", fontSize = 12.sp, color = FK.Accent) }
+        Spacer(Modifier.width(8.dp))
+        Text(if (open) "▲" else "▼", fontSize = 11.sp, color = FK.Muted)
+    }
+    if (open) {
+        val shape = RoundedCornerShape(14.dp)
+        Column(
+            Modifier.padding(bottom = 10.dp).widthIn(max = 720.dp).fillMaxWidth().clip(shape).background(FK.Surface)
+                .border(1.dp, FK.Line, shape).padding(14.dp),
+        ) {
+            SelectionContainer { Text(text, fontSize = 13.sp, lineHeight = 19.sp, color = FK.Muted) }
         }
     }
 }

@@ -4,8 +4,8 @@ import java.util.UUID
 
 enum class Role { USER, ASSISTANT }
 
-/** [GEMMA] is never selected directly: it answers instead of Nano when "Gemma verwenden" is on (label of the answer). */
-enum class Engine(val label: String) { NANO("Gemini Nano (offline)"), CLAUDE("Claude (online)"), GEMMA("Gemma 4 (offline)") }
+/** [GEMMA] = any downloaded LiteRT-LM model (name in [ChatMessage.model]); the name stays for stored chats. */
+enum class Engine(val label: String) { NANO("Gemini Nano (offline)"), CLAUDE("Claude (online)"), GEMMA("Lokales Modell (offline)") }
 
 /** A photo or PDF copied into the app's private storage. [text] is extracted text (PDF text / OCR). */
 data class Attachment(
@@ -37,6 +37,20 @@ data class ChatMessage(
     val web: Boolean = false,
     /** Data that must stay on the device (daily briefing): never sent to Claude. */
     val localOnly: Boolean = false,
+    /** Name of the model that wrote this answer. */
+    val model: String? = null,
+    /** Reasoning of a thinking model (text before </think>): shown collapsed as "Gedanken", never exported or spoken. */
+    val thoughts: String = "",
+    /** Generated pieces (≈ tokens, thinking included); 0 = unknown. Only shown, never exported. */
+    val tokens: Int = 0,
+    /** From sending the question until the answer was complete (ms). */
+    val answerMs: Long = 0,
+    /** Writing speed after the first piece (tokens per second). */
+    val tokPerSec: Float = 0f,
+    /** "GPU", "CPU" or "AICore" (Nano). */
+    val backend: String = "",
+    /** Average CPU load of the app while answering (%), -1 = not measured. */
+    val cpuPct: Int = -1,
 )
 
 data class Conversation(

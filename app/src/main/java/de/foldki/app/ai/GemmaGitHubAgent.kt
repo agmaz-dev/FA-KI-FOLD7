@@ -11,7 +11,7 @@ import org.json.JSONObject
  * GitHub with Gemma 4 E2B on the phone (no Claude, no other key): Gemma asks for a tool with one line
  * "WERKZEUG: {json}", the app runs it (changes only after the user's approval) and sends the result back.
  */
-class GemmaGitHubAgent(private val gemma: GemmaEngine, token: String) {
+class GemmaGitHubAgent(private val gemma: LocalEngine, token: String) {
     private val tools = GitHubTools(GitHubApi(token))
 
     companion object {

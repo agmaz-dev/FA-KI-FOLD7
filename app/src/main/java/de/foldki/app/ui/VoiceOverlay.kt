@@ -132,7 +132,7 @@ fun VoiceOverlay(ui: UiState, vm: ChatViewModel, voice: VoiceController, onClose
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                if (ui.engine == Engine.NANO) "Sprachmodus · Gemini Nano" else "Sprachmodus · Claude",
+                "Sprachmodus · " + ui.activeName,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp,
             )
             Spacer(Modifier.weight(1f))

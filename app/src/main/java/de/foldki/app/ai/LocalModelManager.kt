@@ -14,188 +14,302 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
 
 /**
- * The optional on-device model Gemma 4 E2B (LiteRT-LM, ~2.59 GB, Apache 2.0).
- * One single download from Hugging Face (fixed revision, size and SHA-256 checked),
- * through Android's DownloadManager: any network (also mobile data), notification,
- * automatic resume after connection loss, cancel. Nothing else of this feature uses the internet.
+ * LiteRT-LM models (.litertlm) on the phone: download from Hugging Face, import own files, delete.
+ * Downloads go through Android's DownloadManager: any network (also mobile data), notification, automatic
+ * resume after connection loss, cancel. At the end the exact size and the SHA-256 from Hugging Face (if known)
+ * are checked. One operation at a time. Which model answers is stored in Settings.activeModel.
  */
 class LocalModelManager(context: Context) {
     private val app = context.applicationContext
-    private val prefs = app.getSharedPreferences("local_model", Context.MODE_PRIVATE)
+    private val prefs = app.getSharedPreferences("lm_models", Context.MODE_PRIVATE)
     private val dm = app.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pollJob: Job? = null
 
+    data class LocalModel(val file: String, val name: String, val size: Long, val source: String)
+
     sealed class State {
-        data object NotDownloaded : State()
-        data class Downloading(val pct: Int, val bytes: Long) : State()
-        data class Verifying(val pct: Int) : State()
-        data object Ready : State()
+        data object Idle : State()
+        data class Downloading(val name: String, val pct: Int, val bytes: Long, val total: Long) : State()
+        data class Verifying(val name: String, val pct: Int) : State()
+        data class Importing(val name: String, val pct: Int) : State()
         data class Failed(val message: String) : State()
     }
 
-    private val _state = MutableStateFlow<State>(State.NotDownloaded)
+    private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
+    private val _models = MutableStateFlow<List<LocalModel>>(emptyList())
+    val models: StateFlow<List<LocalModel>> = _models.asStateFlow()
 
-    /** Called before the file is deleted, so the engine can be closed first. */
-    var beforeDelete: (() -> Unit)? = null
+    /** Called before a file is deleted, so the engine can be closed first. */
+    var beforeDelete: ((File) -> Unit)? = null
+    /** Called when a download/import finished (file name), e.g. to select the new model. */
+    var onAdded: ((String) -> Unit)? = null
 
     val dir: File get() = (app.getExternalFilesDir("models") ?: File(app.filesDir, "models")).apply { mkdirs() }
-    val modelFile: File get() = File(dir, FILE_NAME)
-    private val partFile: File get() = File(dir, "$FILE_NAME.part")
-
-    val isReady: Boolean get() = _state.value is State.Ready
+    fun fileOf(name: String) = File(dir, name)
+    fun exists(name: String) = _models.value.any { it.file == name }
+    fun nameOf(file: String): String = _models.value.firstOrNull { it.file == file }?.name ?: HfModels.displayName(file)
+    val busy: Boolean get() = _state.value is State.Downloading || _state.value is State.Verifying || _state.value is State.Importing
 
     init { refresh() }
 
-    /** Restores the state after an app start (running download, finished file, …). */
+    /** Rebuilds the list from the folder and restores a running download after an app start. */
     fun refresh() {
-        val id = prefs.getLong(KEY_ID, -1L)
-        val f = modelFile
-        when {
-            f.exists() && f.length() == SIZE && prefs.getString(KEY_VERIFIED, null) == stamp(f) -> _state.value = State.Ready
-            id >= 0 -> poll(id)
-            partFile.exists() && partFile.length() == SIZE -> verify(partFile)
-            f.exists() && f.length() == SIZE -> verify(f)
-            else -> _state.value = State.NotDownloaded
+        scanModels()
+        val pending = pending()
+        if (pending != null && !busy) {
+            val id = pending.optLong("id", -1L)
+            if (id >= 0) poll(id, pending)
         }
+    }
+
+    private fun meta(): JSONObject = runCatching { JSONObject(prefs.getString("meta", "{}") ?: "{}") }.getOrDefault(JSONObject())
+    private fun saveMeta(o: JSONObject) = prefs.edit().putString("meta", o.toString()).apply()
+    private fun pending(): JSONObject? = prefs.getString("pending", null)?.let { runCatching { JSONObject(it) }.getOrNull() }
+
+    private fun scanModels() {
+        val m = meta()
+        _models.value = (dir.listFiles() ?: emptyArray())
+            .filter { it.isFile && it.name.lowercase().endsWith(HfModels.EXT) }
+            .sortedBy { it.name.lowercase() }
+            .map { f ->
+                val o = m.optJSONObject(f.name)
+                LocalModel(
+                    file = f.name,
+                    name = o?.optString("name")?.ifBlank { null } ?: HfModels.displayName(f.name),
+                    size = f.length(),
+                    source = o?.optString("source")?.ifBlank { null } ?: if (f.name == GEMMA_FILE) GEMMA_REPO else "Import",
+                )
+            }
     }
 
     /** Free space in the model folder (bytes). */
     fun freeBytes(): Long = runCatching { dir.usableSpace }.getOrDefault(0L)
 
-    fun download() {
-        if (_state.value is State.Downloading || _state.value is State.Verifying || _state.value is State.Ready) return
-        val need = SIZE + RESERVE
-        if (freeBytes() < need) {
-            _state.value = State.Failed("Zu wenig Speicher: ${gb(need)} nötig (Modell + 1 GB Reserve), frei sind ${gb(freeBytes())}.")
-            return
+    fun totalRam(): Long = runCatching {
+        val am = app.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.totalMem
+    }.getOrDefault(0L)
+
+    /** Starts the download of one .litertlm file. Returns null or an error text (shown by the caller). */
+    fun download(f: HfModels.LmFile): String? {
+        if (busy) return "Es läuft schon ein Download oder Import."
+        if (!f.usable) return "Diese Datei ist keine .litertlm-Datei. Fold KI kann nur LiteRT-LM-Modelle (.litertlm) laden."
+        val name = f.fileName
+        if (fileOf(name).exists() && (f.size <= 0 || fileOf(name).length() == f.size)) {
+            scanModels(); onAdded?.invoke(name); return null
         }
-        runCatching { partFile.delete(); modelFile.delete() }
-        val req = DownloadManager.Request(Uri.parse(URL))
-            .setTitle("Gemma 4 E2B für Fold KI")
-            .setDescription("Optionales On-Device-Modell (2,59 GB)")
+        val need = f.size + RESERVE
+        if (f.size > 0 && freeBytes() < need) return "Zu wenig Speicher: ${gb(need)} nötig (Modell + 1 GB Reserve), frei sind ${gb(freeBytes())}."
+        val part = File(dir, "$name.part")
+        runCatching { part.delete() }
+        val req = DownloadManager.Request(Uri.parse(f.url))
+            .setTitle("$name für Fold KI")
+            .setDescription("KI-Modell (${gb(f.size)})")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            // Wish of the user: any connection (unlimited mobile data), no Wi-Fi-only restriction.
+            // Wish of the user: any connection (also mobile data), no Wi-Fi-only restriction.
             .setAllowedOverMetered(true)
             .setAllowedOverRoaming(true)
-            .setDestinationUri(Uri.fromFile(partFile))
-        val id = runCatching { dm.enqueue(req) }.getOrElse {
-            _state.value = State.Failed("Download konnte nicht gestartet werden: ${it.message ?: it.javaClass.simpleName}")
-            return
-        }
-        prefs.edit().putLong(KEY_ID, id).apply()
-        _state.value = State.Downloading(0, 0)
-        poll(id)
+            .setDestinationUri(Uri.fromFile(part))
+        val id = runCatching { dm.enqueue(req) }.getOrElse { return "Download konnte nicht gestartet werden: ${it.message ?: it.javaClass.simpleName}" }
+        val p = JSONObject().put("id", id).put("file", name).put("repo", f.repo).put("size", f.size)
+            .put("sha", f.sha256 ?: "").put("name", HfModels.displayName(name))
+        prefs.edit().putString("pending", p.toString()).apply()
+        _state.value = State.Downloading(name, 0, 0, f.size)
+        poll(id, p)
+        return null
     }
 
+    /** Cancels a running download and removes the partial file. */
     fun cancel() {
-        val id = prefs.getLong(KEY_ID, -1L)
+        val p = pending()
         pollJob?.cancel()
-        if (id >= 0) runCatching { dm.remove(id) }
-        prefs.edit().remove(KEY_ID).apply()
-        runCatching { partFile.delete() }
-        _state.value = State.NotDownloaded
+        p?.optLong("id", -1L)?.takeIf { it >= 0 }?.let { runCatching { dm.remove(it) } }
+        p?.optString("file")?.takeIf { it.isNotBlank() }?.let { runCatching { File(dir, "$it.part").delete() } }
+        prefs.edit().remove("pending").apply()
+        _state.value = State.Idle
     }
 
-    /** Closes the engine (via [beforeDelete]), deletes the file and frees the 2.59 GB. */
-    fun delete() {
-        cancel()
-        runCatching { beforeDelete?.invoke() }
-        runCatching { modelFile.delete(); partFile.delete() }
-        prefs.edit().remove(KEY_VERIFIED).apply()
-        _state.value = State.NotDownloaded
+    /** Closes the engine (via [beforeDelete]) and deletes the model file (and leftover partial files). */
+    fun delete(file: String) {
+        val f = fileOf(file)
+        runCatching { beforeDelete?.invoke(f) }
+        runCatching { f.delete(); File(dir, "$file.part").delete(); File(dir, "$file.import").delete() }
+        val m = meta(); m.remove(file); saveMeta(m)
+        scanModels()
     }
 
-    private fun poll(id: Long) {
+    fun clearError() { if (_state.value is State.Failed) _state.value = State.Idle }
+
+    private fun poll(id: Long, p: JSONObject) {
+        val name = p.optString("file")
+        val total = p.optLong("size", 0L)
+        val part = File(dir, "$name.part")
         pollJob?.cancel()
         pollJob = scope.launch {
             while (isActive) {
                 val q = runCatching { dm.query(DownloadManager.Query().setFilterById(id)) }.getOrNull()
                 if (q == null || !q.moveToFirst()) {
                     q?.close()
-                    prefs.edit().remove(KEY_ID).apply()
-                    if (partFile.exists() && partFile.length() == SIZE) verify(partFile) else _state.value = State.NotDownloaded
+                    prefs.edit().remove("pending").apply()
+                    if (part.exists() && total > 0 && part.length() == total) verify(part, p) else _state.value = State.Idle
                     return@launch
                 }
                 val status = q.getInt(q.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
                 val done = q.getLong(q.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                val dmTotal = q.getLong(q.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
                 val reason = q.getInt(q.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
                 q.close()
+                val t = if (total > 0) total else dmTotal
                 when (status) {
                     DownloadManager.STATUS_SUCCESSFUL -> {
-                        prefs.edit().remove(KEY_ID).apply()
-                        verify(partFile)
+                        prefs.edit().remove("pending").apply()
+                        verify(part, p)
                         return@launch
                     }
                     DownloadManager.STATUS_FAILED -> {
-                        prefs.edit().remove(KEY_ID).apply()
+                        prefs.edit().remove("pending").apply()
                         runCatching { dm.remove(id) }
-                        _state.value = State.Failed("Download fehlgeschlagen (Code $reason). Bitte erneut versuchen.")
+                        runCatching { part.delete() }
+                        _state.value = State.Failed(
+                            if (reason == 401 || reason == 403) "Download abgelehnt (HTTP $reason): Dieses Modell ist geschützt und braucht eine Anmeldung bei Hugging Face."
+                            else "Download fehlgeschlagen (Code $reason). Bitte erneut versuchen.",
+                        )
                         return@launch
                     }
-                    else -> _state.value = State.Downloading(((done * 100) / SIZE).toInt().coerceIn(0, 100), done)
+                    else -> _state.value = State.Downloading(name, if (t > 0) ((done * 100) / t).toInt().coerceIn(0, 100) else 0, done, t)
                 }
                 delay(1000)
             }
         }
     }
 
-    private fun verify(file: File) {
+    private fun verify(file: File, p: JSONObject) {
+        val name = p.optString("file")
+        val size = p.optLong("size", 0L)
+        val sha = p.optString("sha").takeIf { it.length == 64 }
         pollJob?.cancel()
-        _state.value = State.Verifying(0)
+        _state.value = State.Verifying(name, 0)
         pollJob = scope.launch {
-            val ok = withContext(Dispatchers.IO) {
+            val error = withContext(Dispatchers.IO) {
                 runCatching {
-                    if (file.length() != SIZE) return@runCatching false
-                    val md = MessageDigest.getInstance("SHA-256")
-                    val buf = ByteArray(1 shl 20)
-                    var read = 0L
-                    var lastPct = -1
-                    file.inputStream().use { input ->
-                        while (true) {
-                            val n = input.read(buf)
-                            if (n < 0) break
-                            md.update(buf, 0, n)
-                            read += n
-                            val pct = ((read * 100) / SIZE).toInt()
-                            if (pct != lastPct) { lastPct = pct; _state.value = State.Verifying(pct) }
+                    if (size > 0 && file.length() != size) return@runCatching "Größe stimmt nicht (${file.length()} statt $size Bytes)."
+                    if (sha != null) {
+                        val md = MessageDigest.getInstance("SHA-256")
+                        val buf = ByteArray(1 shl 20)
+                        var read = 0L
+                        var lastPct = -1
+                        val len = file.length().coerceAtLeast(1)
+                        file.inputStream().use { input ->
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                md.update(buf, 0, n)
+                                read += n
+                                val pct = ((read * 100) / len).toInt()
+                                if (pct != lastPct) { lastPct = pct; _state.value = State.Verifying(name, pct) }
+                            }
                         }
+                        if (md.digest().joinToString("") { "%02x".format(it) } != sha) return@runCatching "Prüfsumme (SHA-256) stimmt nicht."
                     }
-                    md.digest().joinToString("") { "%02x".format(it) } == SHA256
-                }.getOrDefault(false)
+                    null
+                }.getOrElse { it.message ?: it.javaClass.simpleName }
             }
-            if (!ok) {
+            if (error != null) {
                 runCatching { file.delete() }
-                _state.value = State.Failed("Prüfung fehlgeschlagen (Datei beschädigt). Bitte erneut herunterladen.")
+                _state.value = State.Failed("Prüfung fehlgeschlagen: $error Bitte erneut herunterladen.")
                 return@launch
             }
-            val target = modelFile
-            if (file != target && !file.renameTo(target)) {
-                runCatching { file.copyTo(target, overwrite = true); file.delete() }
-            }
-            prefs.edit().putString(KEY_VERIFIED, stamp(target)).apply()
-            _state.value = State.Ready
+            val target = fileOf(name)
+            if (!file.renameTo(target)) runCatching { file.copyTo(target, overwrite = true); file.delete() }
+            val m = meta()
+            m.put(name, JSONObject().put("name", p.optString("name").ifBlank { HfModels.displayName(name) }).put("source", p.optString("repo").ifBlank { "Hugging Face" }))
+            saveMeta(m)
+            scanModels()
+            _state.value = State.Idle
+            onAdded?.invoke(name)
         }
     }
 
-    private fun stamp(f: File) = "${f.length()}:${f.lastModified()}:$SHA256"
+    /** Copies an own .litertlm file from the phone (Storage Access Framework) into the model folder. */
+    fun import(uri: Uri) {
+        if (busy) { _state.value = State.Failed("Es läuft schon ein Download oder Import."); return }
+        val cr = app.contentResolver
+        var name = "modell.litertlm"
+        var size = -1L
+        runCatching {
+            cr.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE), null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    c.getString(0)?.let { name = it }
+                    if (!c.isNull(1)) size = c.getLong(1)
+                }
+            }
+        }
+        name = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        if (!name.lowercase().endsWith(HfModels.EXT)) { _state.value = State.Failed("Bitte eine .litertlm-Datei wählen („$name“ ist keine)."); return }
+        if (size > 0 && freeBytes() < size + RESERVE) { _state.value = State.Failed("Zu wenig Speicher: ${gb(size + RESERVE)} nötig, frei sind ${gb(freeBytes())}."); return }
+        val tmp = File(dir, "$name.import")
+        _state.value = State.Importing(name, 0)
+        pollJob?.cancel()
+        pollJob = scope.launch {
+            val error = runCatching {
+                cr.openInputStream(uri)?.use { input ->
+                    tmp.outputStream().use { out ->
+                        val buf = ByteArray(1 shl 20)
+                        var done = 0L
+                        var lastPct = -1
+                        while (isActive) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            val pct = if (size > 0) ((done * 100) / size).toInt() else 0
+                            if (pct != lastPct) { lastPct = pct; _state.value = State.Importing(name, pct) }
+                        }
+                    }
+                } ?: return@runCatching "Datei konnte nicht geöffnet werden."
+                if (!isActive) return@runCatching "Abgebrochen."
+                null
+            }.getOrElse { it.message ?: it.javaClass.simpleName }
+            if (error != null) {
+                runCatching { tmp.delete() }
+                _state.value = State.Failed("Import fehlgeschlagen: $error")
+                return@launch
+            }
+            val target = fileOf(name)
+            runCatching { target.delete() }
+            if (!tmp.renameTo(target)) runCatching { tmp.copyTo(target, overwrite = true); tmp.delete() }
+            val m = meta()
+            m.put(name, JSONObject().put("name", HfModels.displayName(name)).put("source", "Import"))
+            saveMeta(m)
+            scanModels()
+            _state.value = State.Idle
+            onAdded?.invoke(name)
+        }
+    }
+
+    fun cancelImport() {
+        pollJob?.cancel()
+        (dir.listFiles() ?: emptyArray()).filter { it.name.endsWith(".import") }.forEach { runCatching { it.delete() } }
+        _state.value = State.Idle
+    }
 
     companion object {
-        const val FILE_NAME = "gemma-4-E2B-it.litertlm"
-        /** Fixed Hugging Face revision of litert-community/gemma-4-E2B-it-litert-lm (ungated, Apache 2.0). */
-        const val REVISION = "2d74ac41a33d7da82f39f7d5720a04c68514a103"
-        const val URL = "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/$REVISION/$FILE_NAME"
-        /** Values from the Hugging Face API for this revision (LFS size and sha256). */
-        const val SIZE = 2_588_147_712L
-        const val SHA256 = "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c"
         const val RESERVE = 1_000_000_000L
-        private const val KEY_ID = "download_id"
-        private const val KEY_VERIFIED = "verified"
+
+        /** Gemma 4 E2B (Google, Apache 2.0) as one-tap suggestion: fixed revision, size and SHA-256 (as before). */
+        const val GEMMA_REPO = "litert-community/gemma-4-E2B-it-litert-lm"
+        const val GEMMA_FILE = "gemma-4-E2B-it.litertlm"
+        const val GEMMA_REVISION = "2d74ac41a33d7da82f39f7d5720a04c68514a103"
+        const val GEMMA_SIZE = 2_588_147_712L
+        const val GEMMA_SHA256 = "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c"
+        val GEMMA = HfModels.LmFile(GEMMA_REPO, GEMMA_FILE, GEMMA_SIZE, GEMMA_SHA256, GEMMA_REVISION)
 
         fun gb(bytes: Long): String = "%.2f GB".format(java.util.Locale.GERMANY, bytes / 1e9)
     }

@@ -30,6 +30,13 @@ class ChatStore(context: Context) {
                             isError = m.optBoolean("isError"),
                             web = m.optBoolean("web"),
                             localOnly = m.optBoolean("localOnly"),
+                            model = m.optString("model").ifEmpty { null },
+                            thoughts = m.optString("thoughts"),
+                            tokens = m.optInt("tokens"),
+                            answerMs = m.optLong("answerMs"),
+                            tokPerSec = m.optDouble("tokPerSec", 0.0).toFloat(),
+                            backend = m.optString("backend"),
+                            cpuPct = m.optInt("cpuPct", -1),
                             attachments = m.optJSONArray("attachments")?.let { a ->
                                 (0 until a.length()).map { k ->
                                     val x = a.getJSONObject(k)
@@ -66,6 +73,11 @@ class ChatStore(context: Context) {
                 msgs.put(JSONObject().apply {
                     put("id", m.id); put("role", m.role.name); put("text", m.text)
                     put("engine", m.engine?.name ?: ""); put("isError", m.isError); put("web", m.web); put("localOnly", m.localOnly)
+                    m.model?.let { put("model", it) }
+                    if (m.thoughts.isNotEmpty()) put("thoughts", m.thoughts)
+                    if (m.tokens > 0) { put("tokens", m.tokens); put("answerMs", m.answerMs); put("tokPerSec", m.tokPerSec.toDouble()) }
+                    if (m.backend.isNotEmpty()) put("backend", m.backend)
+                    if (m.cpuPct >= 0) put("cpuPct", m.cpuPct)
                     put("attachments", JSONArray().apply {
                         m.attachments.forEach { a ->
                             put(JSONObject().apply {
