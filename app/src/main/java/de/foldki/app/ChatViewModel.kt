@@ -381,25 +381,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         briefJob = viewModelScope.launch { summarize(b.copy(loading = true).also { _brief.value = it }) }
     }
 
-    private suspend fun summarize(b: de.foldki.app.brief.Briefing) {
+    /** No built-in prompt (from 3.3): the briefing is the plain list, no model is asked. */
+    private fun summarize(b: de.foldki.app.brief.Briefing) {
         briefRetryAi = false
-        if (b.isEmpty) { _brief.value = b.copy(loading = false); return }
-        val act = settings.activeModel
-        val summary = try {
-            when {
-                act == Settings.NANO -> { delay(400); nano.brief(de.foldki.app.brief.DailyBriefing.facts(b)).ifBlank { null } } // Nano only answers apps in the foreground
-                act.isNotBlank() && models.exists(act) ->
-                    askModel(NanoEngine.BRIEF_SYSTEM, de.foldki.app.brief.DailyBriefing.facts(b).take(3500) + "\n\nTagesstart:", precise = false).ifBlank { null }
-                else -> null // no model chosen: plain list without AI
-            }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            // Not in the foreground (yet): next open tries again. Otherwise: plain list without AI.
-            if (act == Settings.NANO && NanoEngine.errorCode(e) == com.google.mlkit.genai.common.GenAiException.ErrorCode.BACKGROUND_USE_BLOCKED) briefRetryAi = true
-            null
-        }
-        _brief.update { cur -> (cur ?: b).copy(summary = summary, loading = false) }
+        _brief.update { cur -> (cur ?: b).copy(summary = null, loading = false) }
     }
 
     fun closeBrief() { briefJob?.cancel(); briefRetryAi = false; _brief.value = null }
@@ -587,7 +572,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun saveSettings(apiKey: String, model: String, system: String) {
         settings.apiKey = apiKey
         settings.claudeModel = model
-        settings.systemPrompt = system.ifBlank { Settings.DEFAULT_SYSTEM }
+        settings.systemPrompt = system
     }
 
     fun newChat() { stop(); _ui.update { it.copy(currentId = null) } }
@@ -632,7 +617,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(currentId = conv.id, generating = true, pending = emptyList()) }
 
         val history = conv.messages.dropLast(1)
-        val letters = settings.letters
+        val letters = false // no built-in letter rules (from 3.3)
         // Letter logic only with the switch "Briefe".
         val lastDoc = if (!letters) null else history.lastOrNull { it.role == Role.ASSISTANT && !it.isError }
             ?.let { DocumentParser.parse(it.text) }?.takeIf { it.document != null }
@@ -773,8 +758,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Web results for the local model (search terms by the model itself, then Wikipedia + news). */
     private suspend fun webFor(question: String): String {
-        val terms = runCatching { NanoEngine.firstLineTerms(ThinkParser.answerOnly(llm.complete("", NanoEngine.searchTermsPrompt(question)), HfModels.isThinking(settings.activeModel))) }.getOrDefault("")
-        return WebLookup.search(terms.ifBlank { question.take(100) })
+        // No prompt for search terms (from 3.3): the question itself is searched.
+        return WebLookup.search(question.take(100))
     }
 
     /** Puts a finished letter (or a document the user asked for as letter) into the chat as a PDF. */
@@ -872,35 +857,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * What goes to the model as instruction: the user's own text from the settings – and only with the switch "Briefe"
      * also today's date and the letter/PDF rules. No other built-in rules (they made thinking models slow).
      */
-    private fun buildSystem(letters: Boolean, letter: Boolean, followUpDoc: Boolean, history: List<ChatMessage> = emptyList()): String = buildString {
-        append(settings.systemPrompt.trim())
-        if (!letters) return@buildString
-        append("\n")
-        // Marker rule only when a document is likely asked for: small models otherwise echo "---ENDE---" into normal answers.
-        val lastAsk = history.lastOrNull { it.role == Role.USER }?.text.orEmpty()
-        if (letter || followUpDoc || DOC_WORDS.containsMatchIn(lastAsk)) append(Settings.DOCUMENT_MARKER_RULE).append("\n")
-        if (followUpDoc) append(Settings.DOCUMENT_FOLLOWUP_RULE).append("\n")
-        append("Heutiges Datum: ").append(today()).append("\n")
-        if (letter) {
-            append(Settings.LETTER_RULES).append("\n")
-            append("Datum für das neue Schreiben (heute): ").append(today()).append("\n")
-            // Data of the attached original letter, read by the app from its first page.
-            val original = history.lastOrNull { it.role == Role.USER && it.attachments.isNotEmpty() }?.attachments?.lastOrNull()
-            if (original != null) {
-                append("Datum des angehängten Schreibens: ").append(original.docDate ?: "unbekannt").append("\n")
-                append("Empfänger (aus dem Originalschreiben): ").append(original.recipient?.let { "\n$it" } ?: "unbekannt").append("\n")
-                original.refNo?.let { append("Zeichen des Originalschreibens: ").append(it).append("\n") }
-                original.subject?.let { append("Betreff des Originalschreibens: ").append(it).append("\n") }
-                original.analysis?.let { de.foldki.app.export.LetterAnalysis.parse(it) }?.let { r ->
-                    if (r.deadline.isNotBlank()) append("Frist im Originalschreiben: ").append(r.deadline).append("\n")
-                    if (r.amount.isNotBlank()) append("Betrag im Originalschreiben: ").append(r.amount).append("\n")
-                    if (r.contact.isNotBlank()) append("Ansprechpartner: ").append(r.contact).append("\n")
-                    if (r.note.isNotBlank()) append("Handschriftliche Notiz des Nutzers auf dem Schreiben: ").append(r.note).append("\n")
-                }
-            }
-            // Sender, recipient, date and signature are set by the app (LetterAnalysis.assemble), not by the model.
-        }
-    }
+    private fun buildSystem(letters: Boolean, letter: Boolean, followUpDoc: Boolean, history: List<ChatMessage> = emptyList()): String =
+        settings.systemPrompt.trim() // only the user's own text – nothing from the app
 
     /** Text that goes into a PDF: letters without a date line get today's date (safety net, no duplicates). */
     fun pdfText(doc: String): String = DocumentParser.ensureDateLine(doc, today(), place = settings.activeSender?.city)

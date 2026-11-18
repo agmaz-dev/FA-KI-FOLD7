@@ -113,7 +113,7 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
                         vm.clearModelError(); vm.downloadModel(LocalModelManager.GEMMA)
                     }
                 }
-                FkButton("Hugging Face durchsuchen", ghost = true) { vm.clearModelError(); openBrowser() }
+                FkButton("Modelle durchsuchen (passend zur App)", ghost = true) { vm.clearModelError(); openBrowser() }
                 FkButton("Eigene .litertlm importieren", ghost = true) { vm.clearModelError(); pick.launch(arrayOf("*/*")) }
                 Note("Nur .litertlm-Dateien (LiteRT-LM) laufen in Fold KI – .gguf und .task gehen nicht. Empfohlen: 4-Bit-Dateien bis ca. 3–4 GB.")
             }

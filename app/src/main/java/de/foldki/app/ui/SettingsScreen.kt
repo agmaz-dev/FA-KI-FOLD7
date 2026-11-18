@@ -104,7 +104,7 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, onBack: () -> Unit) {
     BackHandler { back() }
 
     val title = when (page) {
-        "nano" -> "Gemini Nano"; "models" -> "KI-Modelle"; "hf" -> "Hugging Face"; "claude" -> "Claude (online)"; "github" -> "GitHub"
+        "nano" -> "Gemini Nano"; "models" -> "KI-Modelle"; "hf" -> "Modelle"; "claude" -> "Claude (online)"; "github" -> "GitHub"
         "sender" -> "Absender & Unterschrift"; "voice" -> "Stimme"; "brief" -> "Tagesstart"
         "system" -> "Systemanweisung"; "memory" -> "Gedächtnis"; "report" -> "Fehlerbericht"
         else -> "Einstellungen"
@@ -200,12 +200,6 @@ private fun Overview(
 
     SectionLabel("Briefe & Stimme")
     Group {
-        SettingRow(
-            "Briefe",
-            if (ui.letters) "An: Brief- und PDF-Regeln und das Datum gehen mit" else "Aus: es wird nichts vorgeladen",
-            leading = { Tile(Icons.Default.MailOutline, FK.T5) },
-        ) { FkToggle(ui.letters, { vm.setLetters(it) }) }
-        GroupDivider()
         SettingRow("Absender & Unterschrift", if (list.size == 1) "1 Profil" else "${list.size} Profile",
             leading = { Tile(Icons.Default.Draw, FK.T5) }, onClick = { open("sender") })
         GroupDivider()
@@ -224,7 +218,7 @@ private fun Overview(
 
     SectionLabel("Allgemein")
     Group {
-        SettingRow("Systemanweisung", if (system.trim() == Settings.DEFAULT_SYSTEM.trim()) "Standard" else "Eigene Anweisung",
+        SettingRow("Systemanweisung", if (system.isBlank()) "leer – die KI bekommt keine Anweisung" else "Eigene Anweisung",
             leading = { Tile(Icons.Default.Edit, FK.T6) }, onClick = { open("system") })
         GroupDivider()
         SettingRow("Gedächtnis", if (mem.isEmpty()) "noch nichts gemerkt" else "${mem.size} Einträge",
@@ -395,9 +389,9 @@ private fun VoicePage(
 private fun SystemPage(system: String, setSystem: (String) -> Unit) {
     Group {
         FkField("Anweisung an die KI", system, setSystem, minLines = 8)
-        FkButton("Auf Standard zurücksetzen", Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp), ghost = true) {
-            setSystem(Settings.DEFAULT_SYSTEM)
-        }
+        Note("Nur dieser Text geht als Anweisung an die KI – die App fügt nichts hinzu. Leer = keine Anweisung.",
+            Modifier.padding(start = 14.dp, end = 14.dp, bottom = 8.dp))
+        FkButton("Leeren", Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp), ghost = true) { setSystem("") }
     }
 }
 

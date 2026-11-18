@@ -39,3 +39,17 @@ class HfModelsTest {
         assertFalse(HfModels.isThinking("gemma-4-E2B-it.litertlm"))
     }
 }
+
+class HfReposTest {
+    @Test fun officialReposWithUsableFilesOnly() {
+        val json = """[
+          {"id":"litert-community/Qwen3-4B","downloads":50,"siblings":[{"rfilename":"README.md"},{"rfilename":"Qwen3-4B_q4.litertlm"}]},
+          {"id":"litert-community/Gemma3-1B","downloads":900,"siblings":[{"rfilename":"gemma3-1b-it-int4-web.litertlm"},{"rfilename":"gemma3-1b-it-int4.litertlm"}]},
+          {"id":"litert-community/OnlyTask","downloads":999,"siblings":[{"rfilename":"model.task"}]},
+          {"id":"litert-community/OnlyWeb","downloads":5,"siblings":[{"rfilename":"x-web.litertlm"}]}
+        ]"""
+        val r = HfModels.parseRepos(json)
+        assertEquals(listOf("litert-community/Gemma3-1B", "litert-community/Qwen3-4B"), r.map { it.id })
+        assertEquals(listOf("gemma3-1b-it-int4.litertlm"), r[0].usableFiles)
+    }
+}

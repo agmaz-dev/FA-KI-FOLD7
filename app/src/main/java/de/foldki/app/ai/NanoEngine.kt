@@ -48,8 +48,7 @@ class NanoEngine {
         var web = ""
         if (webSearch) {
             val question = history.lastOrNull { it.role == Role.USER }?.text.orEmpty()
-            val terms = firstLineTerms(complete(searchTermsPrompt(question)))
-            web = WebLookup.search(terms.ifBlank { question.take(100) })
+            web = WebLookup.search(question.take(100))
         }
         val prompt = buildPrompt(system, history, web)
         model.generateContentStream(prompt).collect { chunk ->

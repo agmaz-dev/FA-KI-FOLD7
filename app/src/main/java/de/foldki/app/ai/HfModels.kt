@@ -18,7 +18,8 @@ object HfModels {
         val revision: String = "main",
     ) {
         val fileName: String get() = path.substringAfterLast('/')
-        val usable: Boolean get() = fileName.lowercase().endsWith(EXT)
+        /** Only .litertlm for the phone runtime; "web" files are built for browsers (WebGPU) and do not load here. */
+        val usable: Boolean get() = fileName.lowercase().let { it.endsWith(EXT) && !Regex("[_.-]web").containsMatchIn(it) }
         /** Short hint from the file name: "4-Bit", "8-Bit", "16-Bit", "32-Bit" or "". */
         val bits: String get() = bitsOf(fileName)
         val url: String get() = resolveUrl(repo, path, revision)
@@ -119,6 +120,48 @@ object HfModels {
     fun isThinking(fileName: String): Boolean {
         val n = fileName.lowercase()
         return n.contains("think") || n.contains("deepseek-r1") || n.contains("-r1-") || n.contains("qwq")
+    }
+
+    /** One model repo of litert-community in the grid. */
+    data class Repo(val id: String, val downloads: Long, val likes: Long, val files: List<String>) {
+        val name: String get() = id.substringAfter('/')
+        val usableFiles: List<String> get() = files.filter { LmFile("", it, 0, null).usable }
+        val thinking: Boolean get() = isThinking(name)
+    }
+
+    /** Google's own conversions for LiteRT-LM – these are built for the runtime in the app. */
+    const val OFFICIAL = "litert-community"
+
+    fun officialUrl(): String = "https://huggingface.co/api/models?author=$OFFICIAL&full=true&sort=downloads&direction=-1&limit=500"
+
+    /** Repos with at least one usable .litertlm file, most downloaded first (from `/api/models?author=…&full=true`). */
+    fun parseRepos(json: String): List<Repo> {
+        val arr = JSONArray(json)
+        val out = ArrayList<Repo>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val id = o.optString("id").ifBlank { o.optString("modelId") }
+            if (id.isBlank()) continue
+            val sib = o.optJSONArray("siblings")
+            val files = (0 until (sib?.length() ?: 0)).mapNotNull { sib?.optJSONObject(it)?.optString("rfilename") }
+            val r = Repo(id, o.optLong("downloads"), o.optLong("likes"), files)
+            if (r.usableFiles.isNotEmpty()) out += r
+        }
+        return out.sortedByDescending { it.downloads }
+    }
+
+    /** All usable LiteRT-LM models of litert-community (network; call off the main thread). */
+    fun fetchOfficial(): List<Repo> = get(officialUrl()) { parseRepos(it) }
+
+    private fun <T> get(url: String, parse: (String) -> T): T {
+        val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        c.connectTimeout = 15000; c.readTimeout = 30000
+        c.setRequestProperty("Accept", "application/json")
+        try {
+            val code = c.responseCode
+            if (code != 200) throw IllegalStateException("Hugging Face antwortet mit HTTP $code.")
+            return parse(c.inputStream.bufferedReader().use { it.readText() })
+        } finally { c.disconnect() }
     }
 
     /** Lists the model files of a repo via the HF API (network; call off the main thread). */

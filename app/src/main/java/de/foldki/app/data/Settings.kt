@@ -191,7 +191,8 @@ class Settings(context: Context) {
         if (t in OLD_DEFAULTS) return true
         return OLD_DEFAULTS.any { old -> old.length > 60 && t.startsWith(old.take(60)) } ||
             t.startsWith("Du bist freundlich, direkt und ehrlich") || t.contains("So antwortest du:") ||
-            t.startsWith("Du bist eine sachliche, zuverlässige Assistentin") || t.startsWith("Du bist ein hilfreicher Assistent.")
+            t.startsWith("Du bist eine sachliche, zuverlässige Assistentin") || t.startsWith("Du bist ein hilfreicher Assistent.") ||
+            t.startsWith(OLD_PERSONA_SYSTEM)
     }
 
     companion object {
@@ -232,13 +233,11 @@ Regeln:
 5. Frag nur nach, wenn die Aufgabe ohne die Angabe wirklich nicht lösbar ist, dann mit einer einzigen kurzen Frage.
 6. Schreibe keine Briefe und keine Anreden wie "Sehr geehrte", außer der Nutzer bittet ausdrücklich darum."""
 
-        /** Natural, warm conversation partner (like in the first versions) – letters stay factual via LETTER_RULES. */
-        const val DEFAULT_SYSTEM = """Du bist eine persönliche KI-Assistentin auf dem Handy des Nutzers – so wie ChatGPT, Claude oder Grok: herzlich, aufmerksam, klug und fachlich sicher.
-Du duzt den Nutzer und antwortest in seiner Sprache. Du redest natürlich wie ein Mensch, nicht wie ein Formular: gehst persönlich auf ihn ein, zeigst Interesse und Verständnis und darfst auch mal locker oder humorvoll sein.
-Fragen beantwortest du richtig und hilfreich: erst die Antwort, dann – wenn es nützt – eine kurze, verständliche Erklärung oder ein Beispiel. Bei einfachen Fragen kurz, bei schwierigen ausführlicher und gut gegliedert.
-Wenn er dir ein Schreiben zeigt, erklärst du ihm in einfachen Worten, worum es geht und was er tun sollte, und bietest deine Hilfe an.
-Du bist ehrlich: Wenn du etwas nicht sicher weißt, sagst du das, statt etwas zu erfinden.
-Briefe und förmliche Anreden wie "Sehr geehrte" nur, wenn der Nutzer ausdrücklich darum bittet."""
+        /** No built-in instruction (from 3.3): empty = the model gets no instruction at all. Old built-in texts are removed. */
+        const val DEFAULT_SYSTEM = ""
+
+        /** Persona default from 2.4 to 3.2 (built in by the app); removed automatically. */
+        private const val OLD_PERSONA_SYSTEM = """Du bist eine persönliche KI-Assistentin auf dem Handy des Nutzers – so wie ChatGPT, Claude oder Grok: herzlich, aufmerksam, klug und fachlich sicher."""
 
         /** Natural default of 2.3; replaced automatically by [DEFAULT_SYSTEM]. */
         private const val OLD_WARM_SYSTEM = """Du bist ein warmherziger, kluger Gesprächspartner. Du redest natürlich und locker wie ein Mensch, duzt den Nutzer und antwortest in seiner Sprache.
