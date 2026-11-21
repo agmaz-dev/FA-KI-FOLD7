@@ -122,36 +122,101 @@ object HfModels {
         return n.contains("think") || n.contains("deepseek-r1") || n.contains("-r1-") || n.contains("qwq")
     }
 
-    /** One model repo of litert-community in the grid. */
-    data class Repo(val id: String, val downloads: Long, val likes: Long, val files: List<String>) {
+    /** One model repo in the grid (like "Erkunden" in FA KI Desktop). */
+    data class Repo(
+        val id: String,
+        val downloads: Long,
+        val likes: Long,
+        val files: List<String>,
+        val tags: List<String> = emptyList(),
+        val pipeline: String = "",
+        val updated: String = "",
+    ) {
         val name: String get() = id.substringAfter('/')
+        val author: String get() = id.substringBefore('/')
+        val official: Boolean get() = author.equals(OFFICIAL, ignoreCase = true)
         val usableFiles: List<String> get() = files.filter { LmFile("", it, 0, null).usable }
         val thinking: Boolean get() = isThinking(name)
+        /** "Bilder", "Werkzeuge", "Denken" – estimated from the tags and the name (as in FA KI Desktop). */
+        val features: List<String> get() = featuresOf(id, tags, pipeline)
+        val parameter: String get() = parameterOf(id)
     }
 
     /** Google's own conversions for LiteRT-LM – these are built for the runtime in the app. */
     const val OFFICIAL = "litert-community"
 
-    fun officialUrl(): String = "https://huggingface.co/api/models?author=$OFFICIAL&full=true&sort=downloads&direction=-1&limit=500"
+    /** Sort keys of the HF API with German labels. */
+    val SORTS = listOf(
+        "downloads" to "Meiste Downloads", "likes" to "Meiste Likes", "trendingScore" to "Im Trend",
+        "lastModified" to "Zuletzt aktualisiert", "createdAt" to "Neueste",
+    )
 
-    /** Repos with at least one usable .litertlm file, most downloaded first (from `/api/models?author=…&full=true`). */
-    fun parseRepos(json: String): List<Repo> {
+    fun officialUrl(sort: String = "downloads"): String =
+        "https://huggingface.co/api/models?author=$OFFICIAL&full=true&sort=$sort&direction=-1&limit=500"
+
+    /** Same estimate as FA KI Desktop (lib/hf.js featuresOf). */
+    fun featuresOf(id: String, tags: List<String>, pipeline: String): List<String> {
+        val t = tags.map { it.lowercase() }.toSet()
+        val n = id.lowercase()
+        val f = ArrayList<String>()
+        if (pipeline == "image-text-to-text" || "image-text-to-text" in t || "vision" in t || "multimodal" in t ||
+            Regex("vl\\b|-vl-|vision|gemma-?3n|gemma-?4").containsMatchIn(n)) f += "Bilder"
+        if ("tool-use" in t || "function-calling" in t || "tools" in t || "agent" in t ||
+            Regex("instruct|-it\\b|-it-|gpt-oss|qwen3|qwen2\\.5|llama-3\\.[123]|mistral|hermes|gemma-?4|functiongemma").containsMatchIn(n)) f += "Werkzeuge"
+        if ("reasoning" in t || "thinking" in t || Regex("think|reason|r1\\b|qwq|gpt-oss|qwen3").containsMatchIn(n)) f += "Denken"
+        return f
+    }
+
+    fun parameterOf(id: String): String =
+        Regex("(?:^|[^A-Za-z0-9.])(\\d+(?:\\.\\d+)?\\s?[BM])(?![A-Za-z0-9])", RegexOption.IGNORE_CASE).find(id)?.groupValues?.get(1)?.uppercase().orEmpty()
+
+    private fun strings(a: JSONArray?): List<String> = (0 until (a?.length() ?: 0)).mapNotNull { a?.optString(it) }
+
+    private fun repoOf(o: org.json.JSONObject): Repo? {
+        val id = o.optString("id").ifBlank { o.optString("modelId") }
+        if (id.isBlank()) return null
+        val sib = o.optJSONArray("siblings")
+        val files = (0 until (sib?.length() ?: 0)).mapNotNull { sib?.optJSONObject(it)?.optString("rfilename") }
+        return Repo(id, o.optLong("downloads"), o.optLong("likes"), files, strings(o.optJSONArray("tags")),
+            o.optString("pipeline_tag"), o.optString("lastModified"))
+    }
+
+    /** Repos with at least one usable .litertlm file, in the order of the API (from `/api/models?author=…&full=true`). */
+    fun parseRepos(json: String, keepOrder: Boolean = false): List<Repo> {
         val arr = JSONArray(json)
         val out = ArrayList<Repo>()
         for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val id = o.optString("id").ifBlank { o.optString("modelId") }
-            if (id.isBlank()) continue
-            val sib = o.optJSONArray("siblings")
-            val files = (0 until (sib?.length() ?: 0)).mapNotNull { sib?.optJSONObject(it)?.optString("rfilename") }
-            val r = Repo(id, o.optLong("downloads"), o.optLong("likes"), files)
+            val r = repoOf(arr.optJSONObject(i) ?: continue) ?: continue
             if (r.usableFiles.isNotEmpty()) out += r
         }
-        return out.sortedByDescending { it.downloads }
+        return if (keepOrder) out else out.sortedByDescending { it.downloads }
     }
 
-    /** All usable LiteRT-LM models of litert-community (network; call off the main thread). */
-    fun fetchOfficial(): List<Repo> = get(officialUrl()) { parseRepos(it) }
+    /** All usable LiteRT-LM models of litert-community, sorted by [sort] (network; call off the main thread). */
+    fun fetchOfficial(sort: String = "downloads"): List<Repo> = get(officialUrl(sort)) { parseRepos(it, keepOrder = true) }
+
+    /** Info of any repo (also from other uploaders) for the detail page. */
+    fun fetchRepo(id: String): Repo = get("https://huggingface.co/api/models/$id") { repoOf(org.json.JSONObject(it)) ?: throw IllegalStateException("Modell nicht gefunden.") }
+
+    /** Description of the model (README without the YAML block), at most [max] characters; "" if there is none. */
+    fun fetchReadme(id: String, max: Int = 8000): String = runCatching {
+        get("https://huggingface.co/$id/raw/main/README.md") { stripFrontMatter(it).trim().take(max) }
+    }.getOrDefault("")
+
+    fun stripFrontMatter(md: String): String {
+        val t = md.trimStart()
+        if (!t.startsWith("---")) return md
+        val end = t.indexOf("\n---", 3)
+        return if (end < 0) md else t.substring(end + 4)
+    }
+
+    /** Fits the phone? Model + ~1 GB for context next to Android and the app. */
+    fun fitText(totalRamBytes: Long, fileSize: Long): Pair<String, Int> = when {
+        totalRamBytes <= 0 || fileSize <= 0 -> "" to 0
+        fileSize + 1_000_000_000L <= totalRamBytes * 0.45 -> "Passt aufs Handy" to 1
+        fileSize + 1_000_000_000L <= totalRamBytes * 0.6 -> "Knapp – evtl. langsam" to 2
+        else -> "Zu groß fürs Handy" to 3
+    }
 
     private fun <T> get(url: String, parse: (String) -> T): T {
         val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
@@ -159,6 +224,8 @@ object HfModels {
         c.setRequestProperty("Accept", "application/json")
         try {
             val code = c.responseCode
+            if (code == 401 || code == 403) throw IllegalStateException("Dieses Modell ist geschützt (Anmeldung bei Hugging Face nötig).")
+            if (code == 404) throw IllegalStateException("Nicht gefunden (HTTP 404).")
             if (code != 200) throw IllegalStateException("Hugging Face antwortet mit HTTP $code.")
             return parse(c.inputStream.bufferedReader().use { it.readText() })
         } finally { c.disconnect() }

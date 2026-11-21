@@ -53,3 +53,20 @@ class HfReposTest {
         assertEquals(listOf("gemma3-1b-it-int4.litertlm"), r[0].usableFiles)
     }
 }
+
+class HfFeaturesTest {
+    @Test fun featuresAndParameters() {
+        val f = HfModels.featuresOf("litert-community/Qwen3-4B-Thinking-2507", listOf("text-generation"), "text-generation")
+        assertTrue("Denken" in f && "Werkzeuge" in f)
+        assertTrue("Bilder" in HfModels.featuresOf("x/y", listOf("image-text-to-text"), ""))
+        assertEquals("4B", HfModels.parameterOf("litert-community/Qwen3-4B-Thinking-2507"))
+        assertEquals("0.6B", HfModels.parameterOf("litert-community/Qwen3-0.6B"))
+    }
+
+    @Test fun fitsPhone() {
+        val ram = 12_000_000_000L
+        assertEquals(1, HfModels.fitText(ram, 2_500_000_000L).second)
+        assertEquals(3, HfModels.fitText(ram, 9_000_000_000L).second)
+        assertEquals("text\nmore", HfModels.stripFrontMatter("---\nlicense: x\n---\ntext\nmore").trim())
+    }
+}
