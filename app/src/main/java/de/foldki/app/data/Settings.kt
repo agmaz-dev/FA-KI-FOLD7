@@ -75,6 +75,11 @@ class Settings(context: Context) {
         get() = prefs.getInt("gpu_percent", 75)
         set(v) = prefs.edit().putInt("gpu_percent", v.coerceIn(0, 100)).apply()
 
+    /** PC-Server (LM Studio / Ollama) in the home WLAN. */
+    var servers: List<de.foldki.app.ai.PcServer>
+        get() = de.foldki.app.ai.PcServer.listFromJson(prefs.getString("pc_servers", "[]"))
+        set(v) = prefs.edit().putString("pc_servers", de.foldki.app.ai.PcServer.listToJson(v)).apply()
+
     var showStats: Boolean
         get() = prefs.getBoolean("show_stats", true)
         set(v) = prefs.edit().putBoolean("show_stats", v).apply()

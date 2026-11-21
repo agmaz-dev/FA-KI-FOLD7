@@ -58,6 +58,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -307,6 +308,7 @@ private fun Sidebar(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, on
                 MenuItem(Icons.Default.Memory, FK.T3, "Modelle", count = ui.localModels.size) { go("models") }
                 MenuItem(Icons.Default.Explore, FK.T7, "Erkunden") { go("hf") }
                 MenuItem(Icons.AutoMirrored.Filled.VolumeUp, FK.T5, "Stimmen") { go("voice") }
+                MenuItem(Icons.Default.Computer, FK.T6, "PC-Server", count = ui.servers.size) { go("server") }
                 MenuItem(Icons.Default.Build, FK.T8, "Werkzeuge") { go("tools") }
                 MenuHead("App")
                 MenuItem(Icons.Default.Settings, FK.T6, "Einstellungen") { go("") }
@@ -421,7 +423,8 @@ private fun TopBar(ui: UiState, showMenu: Boolean, onMenu: () -> Unit, sidebar: 
                 else {
                     StatusDot(modelReady(ui)); Spacer(Modifier.width(5.dp))
                     Text(
-                        listOf(if (ui.usesNano) "AICore" else ui.backend.ifBlank { "GPU" }, if (ui.webSearch) "Web" else "offline").joinToString(" · "),
+                        listOf(if (ui.usesNano) "AICore" else if (ui.activeServer != null) "PC · ${ui.activeServer!!.typeLabel}" else ui.backend.ifBlank { "GPU" },
+                            if (ui.webSearch) "Web" else if (ui.activeServer != null) "WLAN" else "offline").joinToString(" · "),
                         fontSize = 12.sp, color = FK.Muted,
                     )
                 }
@@ -518,6 +521,12 @@ private fun ModelSheet(ui: UiState, vm: ChatViewModel, onDismiss: () -> Unit, on
             ui.localModels.forEach { m ->
                 ModelOption(Icons.Default.Diamond, FK.T3, m.name, LocalModelManager.gb(m.size) + if (de.foldki.app.ai.HfModels.isGguf(m.file)) " · GGUF · llama.cpp" else " · LiteRT · GPU", ui.activeModel == m.file) {
                     vm.selectModel(m.file); onDismiss()
+                }
+            }
+            ui.servers.forEach { sv ->
+                ModelOption(Icons.Default.Computer, FK.T6, sv.model.ifBlank { sv.name }, "PC-Server · ${sv.typeLabel} · ${sv.base}",
+                    ui.activeModel == de.foldki.app.ai.PcServer.PREFIX + sv.id) {
+                    vm.selectModel(de.foldki.app.ai.PcServer.PREFIX + sv.id); onDismiss()
                 }
             }
             ModelOption(Icons.Default.PhoneAndroid, FK.T1, "Gemini Nano", "im Handy eingebaut (AICore)", ui.usesNano) {

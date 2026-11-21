@@ -120,7 +120,7 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, on
         "nano" -> "Gemini Nano"; "models" -> "Modelle"; "hf" -> "Erkunden"; "claude" -> "Claude (online)"; "github" -> "GitHub"
         "sender" -> "Absender & Unterschrift"; "voice" -> "Stimmen"; "brief" -> "Tagesstart"
         "system" -> "Systemanweisung"; "memory" -> "Gedächtnis"; "report" -> "Fehlerbericht"
-        "history" -> "Verlauf"; "saved" -> "Gemerkt"; "instructions" -> "Meine Anweisungen"; "tools" -> "Werkzeuge"
+        "server" -> "PC-Server"; "history" -> "Verlauf"; "saved" -> "Gemerkt"; "instructions" -> "Meine Anweisungen"; "tools" -> "Werkzeuge"
         else -> "Einstellungen"
     }
 
@@ -156,6 +156,7 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, on
                         "history" -> HistoryPage(vm, ui, saved = false, onOpen = onBack)
                         "saved" -> HistoryPage(vm, ui, saved = true, onOpen = onBack)
                         "instructions" -> InstructionsPage(vm, ui)
+                        "server" -> ServerPage(vm, ui)
                         "tools" -> ToolsPage(vm, ui, ghToken) { page = it }
                     }
                 }

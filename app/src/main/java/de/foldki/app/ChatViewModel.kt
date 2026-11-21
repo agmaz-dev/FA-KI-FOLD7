@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import de.foldki.app.ai.GemmaGitHubAgent
 import de.foldki.app.ai.HfModels
 import de.foldki.app.ai.LocalEngine
+import de.foldki.app.ai.ServerEngine
 import de.foldki.app.ai.LocalModelManager
 import de.foldki.app.ai.NanoEngine
 import de.foldki.app.ai.ThinkParser
@@ -66,15 +67,20 @@ data class UiState(
     val showStats: Boolean = true,
     /** Instruction id for a new chat. */
     val newInstruction: String = "",
+    /** PC-Server (LM Studio / Ollama). */
+    val servers: List<de.foldki.app.ai.PcServer> = emptyList(),
 ) {
+    val activeServer: de.foldki.app.ai.PcServer? get() =
+        if (activeModel.startsWith(de.foldki.app.ai.PcServer.PREFIX)) servers.firstOrNull { it.id == activeModel.removePrefix(de.foldki.app.ai.PcServer.PREFIX) } else null
     val usesNano: Boolean get() = activeModel == Settings.NANO
     val activeLocal: LocalModelManager.LocalModel? get() = localModels.firstOrNull { it.file == activeModel }
     val activeName: String get() = when {
         usesNano -> "Gemini Nano"
+        activeServer != null -> activeServer!!.model.ifBlank { activeServer!!.name }
         activeLocal != null -> activeLocal!!.name
         else -> "Kein Modell gewählt"
     }
-    val modelReady: Boolean get() = if (usesNano) nanoReady else activeLocal != null
+    val modelReady: Boolean get() = if (usesNano) nanoReady else if (activeServer != null) activeServer!!.model.isNotBlank() else activeLocal != null
     val current: Conversation? get() = conversations.firstOrNull { it.id == currentId }
     /** Instruction of the shown chat (or of the next new chat). */
     val chatInstruction: String get() = current?.instruction ?: newInstruction
@@ -122,6 +128,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun freeModels() { llm.close(); gguf.close() }
     private fun loadedPathAny(): String? = llm.loadedPath ?: gguf.loadedPath
+
+    // ---- PC-Server ----
+    fun saveServer(s: de.foldki.app.ai.PcServer) {
+        val list = settings.servers.let { l -> if (l.any { it.id == s.id }) l.map { if (it.id == s.id) s else it } else l + s }
+        settings.servers = list
+        _ui.update { it.copy(servers = list) }
+    }
+
+    fun deleteServer(id: String) {
+        val list = settings.servers.filterNot { it.id == id }
+        settings.servers = list
+        _ui.update { it.copy(servers = list) }
+        if (settings.activeModel == de.foldki.app.ai.PcServer.PREFIX + id) { settings.activeModel = ""; _ui.update { it.copy(activeModel = "") } }
+    }
 
     fun setGpuPercent(p: Int) {
         if (llmGenerating) stop()
@@ -184,6 +204,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             showThoughts = settings.showThoughts,
             showStats = settings.showStats,
             newInstruction = settings.defaultInstruction,
+            servers = settings.servers,
             conversations = store.load(),
             githubSet = settings.githubToken.isNotBlank(),
             webSearch = settings.webSearch,
@@ -206,7 +227,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.update { it.copy(localModels = list) }
                 val act = settings.activeModel
                 // The chosen model was deleted: no model is chosen (nothing else answers in its place).
-                if (act.isNotBlank() && act != Settings.NANO && list.none { it.file == act }) {
+                if (act.isNotBlank() && act != Settings.NANO && !act.startsWith(de.foldki.app.ai.PcServer.PREFIX) && list.none { it.file == act }) {
                     settings.activeModel = ""; _ui.update { it.copy(activeModel = "") }
                 }
             }
@@ -754,7 +775,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 logHistory = history.size
                 if (isGitHubTask(prompt, history)) {
                     // GitHub only with a downloaded model on the phone (Nano cannot use tools).
-                    if (HfModels.isGguf(act)) {
+                    if (HfModels.isGguf(act) || act.startsWith(de.foldki.app.ai.PcServer.PREFIX)) {
                         editMessage(conv.id, botMsg.id) {
                             it.copy(text = "GitHub-Werkzeuge gehen zurzeit nur mit LiteRT-Modellen (.litertlm), z. B. Gemma 4 E2B. Bitte so ein Modell wählen.")
                         }
@@ -799,7 +820,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     if (sp.thinking != _ui.value.thinking) _ui.update { it.copy(thinking = sp.thinking) }
                     editMessage(conv.id, botMsg.id) { it.copy(text = sp.answer, thoughts = sp.thoughts) }
                 }
-                if (useNano) {
+                val server = _ui.value.activeServer
+                if (server != null) {
+                    val webText = if (web) webFor(prompt).take(4000) else ""
+                    val turns = history.filter { !it.isError && it.text.isNotBlank() }
+                    val last = turns.lastOrNull { it.role == Role.USER }
+                    if (last != null) {
+                        val earlier = turns.subList(0, turns.lastIndexOf(last)).takeLast(20).map { turnOf(it, 6000) }.map { it.user to it.text }
+                        val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + turnOf(last, 20000).text
+                        de.foldki.app.data.DebugLog.write("START PC-Server ${server.typeLabel} ${server.base} · ${server.model} · Frage ${question.length}")
+                        ServerEngine.chat(server, system, earlier, question, settings.creativity.temperature, settings.answerLength.tokens).collect { onPiece(it) }
+                    }
+                } else if (useNano) {
                     if (!_ui.value.nanoReady) checkNano().join()
                     if (!_ui.value.nanoReady) throw IllegalStateException("Gemini Nano ist nicht bereit: ${_ui.value.nanoStatus}")
                     val limit = settings.answerLength.tokens
@@ -849,8 +881,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         text = end.answer, thoughts = end.thoughts,
                         tokens = if (useNano) 0 else pieces, answerMs = now - t0,
                         tokPerSec = if (!useNano && pieces > 1 && now > tFirst) (pieces - 1) * 1000f / (now - tFirst) else 0f,
-                        backend = if (useNano) "AICore" else if (HfModels.isGguf(act)) (gguf.backendUsed ?: "") else (llm.backendUsed ?: ""),
-                        cpuPct = if (useNano) -1 else cpu.average(),
+                        backend = if (useNano) "AICore" else if (_ui.value.activeServer != null) "PC" else if (HfModels.isGguf(act)) (gguf.backendUsed ?: "") else (llm.backendUsed ?: ""),
+                        cpuPct = if (useNano || _ui.value.activeServer != null) -1 else cpu.average(),
                     )
                 }
                 finished = true

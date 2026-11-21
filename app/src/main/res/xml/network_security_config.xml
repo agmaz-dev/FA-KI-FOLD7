@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PC-Server (LM Studio / Ollama) run in the home WLAN on plain http://<IP>:<Port>, which Android blocks by default.
+     All other connections of the app (Hugging Face, GitHub, web search) use https anyway. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
