@@ -31,6 +31,11 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "FoldKI-$VERSION.apk"
 
       # Extra copy only; the GitHub release below is the download. Never let a full artifact storage stop the release.
+      # Unit tests (LetterMeta, DocumentParser, SenderProfile, TaskExtractor, ThinkParser, HfModels). Shown in the log, APK is published anyway.
+      - name: Unit tests
+        continue-on-error: true
+        run: ./gradlew --no-daemon testReleaseUnitTest
+
       - uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
