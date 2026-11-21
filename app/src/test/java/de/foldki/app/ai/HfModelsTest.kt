@@ -25,6 +25,17 @@ class HfModelsTest {
         assertFalse(files.last().usable) // .task is shown but not usable
     }
 
+    @Test fun prefersGpuBuild() {
+        val t = """[
+          {"type":"file","path":"Qwen3.5-2B_int8.litertlm","size":5,"lfs":{"oid":"${"a".repeat(64)}","size":2120000000}},
+          {"type":"file","path":"Qwen3.5-2B_mixed_int4_gpu.litertlm","size":5,"lfs":{"oid":"${"b".repeat(64)}","size":2400000000}}
+        ]"""
+        val files = HfModels.parseTree("litert-community/Qwen3.5-2B", t)
+        assertEquals("Qwen3.5-2B_mixed_int4_gpu.litertlm", files[0].fileName)
+        assertTrue(files[0].forGpu)
+        assertFalse(files[1].forGpu)
+    }
+
     @Test fun urls() {
         assertEquals("litert-community/Qwen3-4B", HfModels.repoFromUrl("https://huggingface.co/litert-community/Qwen3-4B/tree/main"))
         assertNull(HfModels.repoFromUrl("https://huggingface.co/models?search=litert"))

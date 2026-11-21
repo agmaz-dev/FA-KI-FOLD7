@@ -206,7 +206,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (settings.llmCrashed == id) settings.llmCrashed = "" // the user picked it again on purpose
         settings.activeModel = id
         _ui.update { it.copy(activeModel = id) }
-        if (id == Settings.NANO) checkNano()
+        if (id == Settings.NANO) { checkNano(); if (llm.loadedPath != null) { llm.close(); _ui.update { it.copy(backend = "") } } } // free the memory for Nano
         else if (llm.loadedPath != null && llm.loadedPath != models.fileOf(id).absolutePath) { llm.close(); _ui.update { it.copy(backend = "") } }
     }
 
@@ -267,13 +267,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val f = models.fileOf(file)
         if (llm.loadedPath == f.absolutePath) return null
         if (settings.llmCrashed == file) return "${models.nameOf(file)} hat die App beim letzten Mal beendet. " +
-            "Wähle es unter Einstellungen → KI-Modelle erneut aus, um es nochmal zu versuchen."
-        de.foldki.app.data.DebugLog.write("LADE $file · ${settings.gemmaBackend} · ${LocalModelManager.gb(f.length())} · frei RAM ${freeRamMb()} MB")
+            "Wähle es unter Einstellungen → KI-Modelle erneut aus, um es nochmal zu versuchen." +
+            (if (settings.gemmaBackend == "GPU" && !HfModels.isGpuFile(file) && !file.lowercase().startsWith("gemma")) " Tipp: Diese Datei ist nicht für den Grafikprozessor gebaut. " +
+                "Lade unter Erkunden die Variante mit „gpu“ im Dateinamen." else "")
+        voice.trimMemory() // speech model out of memory before a big load
+        de.foldki.app.data.DebugLog.write("LADE $file · ${settings.gemmaBackend} · ${if (HfModels.isGpuFile(file)) "GPU-Datei" else "keine GPU-Datei"} · " +
+            "${LocalModelManager.gb(f.length())} · frei RAM ${freeRamMb()} MB")
+        val t0 = System.currentTimeMillis()
         val d = llm.loadAsync(f.absolutePath, settings.gemmaBackend == "GPU")
         llmBegin(); d.invokeOnCompletion { llmEnd() } // stays guarded until the native load really ends
         return try {
             val b = withTimeoutOrNull(180_000) { d.await() } ?: return "Das Modell lädt zu lange (über 3 Minuten). Bitte nochmal fragen."
-            de.foldki.app.data.DebugLog.write("Modell geladen: $file · $b")
+            de.foldki.app.data.DebugLog.write("Modell geladen: $file · $b · ${(System.currentTimeMillis() - t0) / 1000} s · frei RAM danach ${freeRamMb()} MB")
             _ui.update { it.copy(backend = b) }
             null
         } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Throwable) {

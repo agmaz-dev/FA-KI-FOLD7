@@ -55,7 +55,8 @@ object DebugLog {
             write(
                 "LETZTES ENDE (${time.format(Date(i.timestamp))}): $why" +
                     (i.description?.let { " · $it" } ?: "") +
-                    " · Speicher: ${i.pss / 1024} MB (PSS), ${i.rss / 1024} MB (RSS)",
+                    " · Speicher: ${i.pss / 1024} MB (PSS), ${i.rss / 1024} MB (RSS)" +
+                    " · App war " + if (i.importance <= android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) "im Vordergrund" else "im Hintergrund (${i.importance})",
             )
         }
         infos.maxOfOrNull { it.timestamp }?.let { prefs.edit().putLong("last_exit", it).apply() }

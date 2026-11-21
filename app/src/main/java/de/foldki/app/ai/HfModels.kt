@@ -23,7 +23,12 @@ object HfModels {
         /** Short hint from the file name: "4-Bit", "8-Bit", "16-Bit", "32-Bit" or "". */
         val bits: String get() = bitsOf(fileName)
         val url: String get() = resolveUrl(repo, path, revision)
+        /** Built for the graphics processor ("gpu" in the file name). Other files are made for the CPU. */
+        val forGpu: Boolean get() = isGpuFile(fileName)
     }
+
+    /** "…_gpu…" in the file name = converted for the GPU (Adreno). Files without it can need far more memory on the GPU. */
+    fun isGpuFile(fileName: String): Boolean = Regex("gpu", RegexOption.IGNORE_CASE).containsMatchIn(fileName.substringAfterLast('/'))
 
     const val EXT = ".litertlm"
     private val OTHER_EXT = listOf(".task", ".tflite", ".gguf", ".bin")
@@ -90,7 +95,7 @@ object HfModels {
 
     /** Proposal: the smallest 4-bit .litertlm, else the smallest .litertlm. */
     fun recommend(files: List<LmFile>): LmFile? {
-        val usable = files.filter { it.usable }
+        val usable = files.filter { it.usable }.let { u -> u.filter { it.forGpu }.ifEmpty { u } } // GPU builds first
         return usable.filter { it.bits == "4-Bit" }.minByOrNull { it.size } ?: usable.minByOrNull { it.size }
     }
 

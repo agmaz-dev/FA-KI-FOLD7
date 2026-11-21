@@ -246,6 +246,8 @@ private fun Detail(vm: ChatViewModel, ui: UiState, id: String, onClose: (() -> U
                     Row(Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(LocalModelManager.gb(f.size), fontSize = 12.sp, color = FK.Muted)
                         if (f.bits.isNotEmpty()) Tag(f.bits)
+                        if (f.usable && f.forGpu) Tag("GPU", on = true)
+                        else if (f.usable && usable.any { it.forGpu }) Text("für Prozessor gebaut", fontSize = 11.sp, color = WARN)
                         if (f.usable) {
                             val (fit, level) = HfModels.fitText(ram, f.size)
                             if (fit.isNotEmpty()) Text(fit, fontSize = 11.sp, color = when (level) { 1 -> FK.Ok; 2 -> WARN; else -> ERR })
