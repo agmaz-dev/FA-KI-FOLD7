@@ -227,6 +227,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         settings.llmLoading = false
         val f = settings.llmAttempt
         if (f.isBlank()) return null
+        // GGUF crashed with GPU share: like FA Fold KI the GPU share goes to 0 % and the model stays usable (CPU).
+        if (HfModels.isGguf(f) && settings.gpuPercent > 0 && settings.gemmaBackend != "CPU") {
+            settings.gpuPercent = 0
+            return "${HfModels.displayName(f)} hat die App mit GPU beendet – GPU-Anteil steht jetzt auf 0 % (nur Prozessor). Unter Modelle wieder erhöhen."
+        }
         settings.llmCrashed = f
         return "${HfModels.displayName(f)} hat die App beendet – gesperrt, bis du es unter Einstellungen → KI-Modelle wieder auswählst"
     }
@@ -302,7 +307,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val f = models.fileOf(file)
         val isGguf = HfModels.isGguf(file)
         if (!isGguf && llm.loadedPath == f.absolutePath) return null
-        if (isGguf && gguf.loadedPath == f.absolutePath && gguf.loadedGpu == settings.gpuPercent) return null
+        // GGUF: "Auf CPU rechnen" = 0 % on the GPU; the same share as loaded = nothing to do.
+        val ggufPct = if (settings.gemmaBackend == "CPU") 0 else settings.gpuPercent
+        if (isGguf && gguf.loadedPath == f.absolutePath && gguf.loadedGpu == ggufPct) return null
         if (settings.llmCrashed == file) return "${models.nameOf(file)} hat die App beim letzten Mal beendet. " +
             "Wähle es unter Einstellungen → KI-Modelle erneut aus, um es nochmal zu versuchen." +
             (if (!isGguf && settings.gemmaBackend == "GPU" && !HfModels.isGpuFile(file) && !file.lowercase().startsWith("gemma")) " Tipp: Diese Datei ist nicht für den Grafikprozessor gebaut. " +
@@ -314,7 +321,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val t0 = System.currentTimeMillis()
         // Only one engine holds a model: free the other one first.
         if (isGguf) llm.close() else gguf.close()
-        val d = if (isGguf) gguf.loadAsync(f.absolutePath, if (settings.gemmaBackend == "CPU") 0 else settings.gpuPercent)
+        val d = if (isGguf) gguf.loadAsync(f.absolutePath, ggufPct)
             else llm.loadAsync(f.absolutePath, settings.gemmaBackend == "GPU")
         llmBegin(); d.invokeOnCompletion { llmEnd() } // stays guarded until the native load really ends
         return try {
