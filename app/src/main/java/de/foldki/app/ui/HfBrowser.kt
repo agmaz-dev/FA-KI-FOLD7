@@ -102,9 +102,12 @@ private fun SearchMode(vm: ChatViewModel, ui: UiState, detail: String?, onDetail
     var repos by remember { mutableStateOf<List<HfModels.Repo>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
-    LaunchedEffect(sort, reload) {
+    // 0 = LiteRT (litert-community, GPU), 1 = GGUF (llama.cpp, also LM Studio files; searched on the server)
+    var fmt by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(sort, reload, fmt, if (fmt == 1) query else "") {
+        if (fmt == 1) kotlinx.coroutines.delay(400)
         error = null; repos = null
-        runCatching { withContext(Dispatchers.IO) { HfModels.fetchOfficial(sort) } }
+        runCatching { withContext(Dispatchers.IO) { if (fmt == 1) HfModels.fetchGguf(sort, query) else HfModels.fetchOfficial(sort) } }
             .onSuccess { repos = it }.onFailure { error = it.message ?: it.javaClass.simpleName }
     }
     val installed = ui.localModels.map { it.file }.toSet()
@@ -112,6 +115,7 @@ private fun SearchMode(vm: ChatViewModel, ui: UiState, detail: String?, onDetail
         val wide = maxWidth >= 600.dp
         val list: @Composable (Modifier) -> Unit = { mod ->
             Column(mod) {
+                Segmented(listOf("LiteRT · GPU", "GGUF"), fmt, Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) { fmt = it }
                 FkField("Suchen (z. B. qwen, gemma, deepseek)", query, { query = it })
                 Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     HfModels.SORTS.forEach { (k, label) -> FkChip(label, active = sort == k) { sort = k } }
@@ -126,9 +130,10 @@ private fun SearchMode(vm: ChatViewModel, ui: UiState, detail: String?, onDetail
                     all == null -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = FK.Accent) }
                     else -> {
                         val q = query.trim().lowercase()
-                        val shown = if (q.isEmpty()) all else all.filter { it.name.lowercase().contains(q) }
+                        val shown = if (q.isEmpty() || fmt == 1) all else all.filter { it.name.lowercase().contains(q) }
                         Note(
-                            "${shown.size} Modelle von Googles litert-community – passen zur App. Funktionen sind aus den Schlagworten geschätzt.",
+                            if (fmt == 1) "${shown.size} GGUF-Modelle (llama.cpp, wie LM Studio). Laden mit GPU-Anteil, Q4_K_M empfohlen."
+                            else "${shown.size} Modelle von Googles litert-community – passen zur App. Funktionen sind aus den Schlagworten geschätzt.",
                             Modifier.padding(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 6.dp),
                         )
                         LazyVerticalGrid(

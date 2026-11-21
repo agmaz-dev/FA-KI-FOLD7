@@ -117,6 +117,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val nano = NanoEngine()
     val models = LocalModelManager(app)
     private val llm = LocalEngine(app)
+    /** GGUF models (llama.cpp); only one of the two engines holds a model at a time. */
+    private val gguf = de.foldki.app.ai.GgufEngine(app)
+
+    private fun freeModels() { llm.close(); gguf.close() }
+    private fun loadedPathAny(): String? = llm.loadedPath ?: gguf.loadedPath
+
+    fun setGpuPercent(p: Int) {
+        if (llmGenerating) stop()
+        settings.gpuPercent = p
+        gguf.close(); _ui.update { it.copy(backend = "") }
+        de.foldki.app.data.DebugLog.write("GGUF GPU-Anteil: $p %")
+    }
     private val llmBusy = AtomicInteger(0)
     @Volatile private var llmGenerating = false
     private var idleJob: Job? = null
@@ -157,7 +169,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         voice.supertonicVoice = stVoice; voice.rate = rate
     }
 
-    override fun onCleared() { voice.release(); llm.close() }
+    override fun onCleared() { voice.release(); freeModels() }
 
     private var job: Job? = null
 
@@ -186,7 +198,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         settings.gemmaLoading = false // old crash flag of 3.x, replaced by llmLoading
         if (settings.activeModel == Settings.NANO) checkNano() // Nano is only asked when it is the chosen model
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { de.foldki.app.export.PdfExporter.cleanup(app) } }
-        models.beforeDelete = { f -> if (llm.loadedPath == f.absolutePath) { if (llmGenerating) stop(); llm.close() } }
+        models.beforeDelete = { f -> if (loadedPathAny() == f.absolutePath) { if (llmGenerating) stop(); freeModels() } }
         models.onAdded = { file -> selectModel(file); notify("${models.nameOf(file)} ist bereit und ausgewählt") }
         viewModelScope.launch { models.state.collect { st -> _ui.update { it.copy(modelOp = st) } } }
         viewModelScope.launch {
@@ -202,7 +214,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // Too hot: free the model's memory (it loads again with the next question).
         if (android.os.Build.VERSION.SDK_INT >= 29) runCatching {
             power.addThermalStatusListener(app.mainExecutor) { status ->
-                if (status >= android.os.PowerManager.THERMAL_STATUS_SEVERE && !llmGenerating) { llm.close(); _ui.update { it.copy(backend = "") } }
+                if (status >= android.os.PowerManager.THERMAL_STATUS_SEVERE && !llmGenerating) { freeModels(); _ui.update { it.copy(backend = "") } }
             }
         }
     }
@@ -229,8 +241,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (settings.llmCrashed == id) settings.llmCrashed = "" // the user picked it again on purpose
         settings.activeModel = id
         _ui.update { it.copy(activeModel = id) }
-        if (id == Settings.NANO) { checkNano(); if (llm.loadedPath != null) { llm.close(); _ui.update { it.copy(backend = "") } } } // free the memory for Nano
-        else if (llm.loadedPath != null && llm.loadedPath != models.fileOf(id).absolutePath) { llm.close(); _ui.update { it.copy(backend = "") } }
+        if (id == Settings.NANO) { checkNano(); if (loadedPathAny() != null) { freeModels(); _ui.update { it.copy(backend = "") } } } // free the memory for Nano
+        else if (loadedPathAny() != null && loadedPathAny() != models.fileOf(id).absolutePath) { freeModels(); _ui.update { it.copy(backend = "") } }
     }
 
     fun downloadModel(f: HfModels.LmFile) { models.download(f)?.let { notify(it) } }
@@ -238,7 +250,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelModelOp() { if (models.state.value is LocalModelManager.State.Importing) models.cancelImport() else models.cancel() }
     fun clearModelError() = models.clearError()
     fun deleteModel(file: String) {
-        if (llmGenerating && llm.loadedPath == models.fileOf(file).absolutePath) stop()
+        if (llmGenerating && loadedPathAny() == models.fileOf(file).absolutePath) stop()
         models.delete(file)
     }
 
@@ -246,7 +258,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun setCpu(cpu: Boolean) {
         if (llmGenerating) stop()
         settings.gemmaBackend = if (cpu) "CPU" else "GPU"
-        llm.close() // next answer loads with the chosen backend
+        freeModels() // next answer loads with the chosen backend
         _ui.update { it.copy(backend = "") }
         de.foldki.app.data.DebugLog.write("Rechenart umgestellt auf ${settings.gemmaBackend}")
     }
@@ -261,7 +273,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun removeMemory(index: Int) { memory.remove(index); _memories.value = memory.all() }
 
     /** App in the background or memory is low: free the model's memory (it loads again on the next question). */
-    fun onBackground() { if (!llmGenerating) { llm.close(); _ui.update { it.copy(backend = "") } } }
+    fun onBackground() { if (!llmGenerating) { freeModels(); _ui.update { it.copy(backend = "") } } }
 
     /** Android is short of memory (app in the background): also free the speech recognition model. */
     fun onLowMemory() { voice.trimMemory() }
@@ -271,7 +283,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun scheduleIdleUnload() {
         idleJob?.cancel()
-        idleJob = viewModelScope.launch { delay(5 * 60_000L); if (!llmGenerating) { llm.close(); _ui.update { it.copy(backend = "") } } }
+        idleJob = viewModelScope.launch { delay(5 * 60_000L); if (!llmGenerating) { freeModels(); _ui.update { it.copy(backend = "") } } }
     }
 
     private fun freeRamMb(): Long = runCatching {
@@ -288,16 +300,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (file.isBlank() || file == Settings.NANO) return noModelText()
         if (!models.exists(file)) return "Das gewählte Modell ist nicht mehr auf dem Handy. " + noModelText()
         val f = models.fileOf(file)
-        if (llm.loadedPath == f.absolutePath) return null
+        val isGguf = HfModels.isGguf(file)
+        if (!isGguf && llm.loadedPath == f.absolutePath) return null
+        if (isGguf && gguf.loadedPath == f.absolutePath && gguf.loadedGpu == settings.gpuPercent) return null
         if (settings.llmCrashed == file) return "${models.nameOf(file)} hat die App beim letzten Mal beendet. " +
             "Wähle es unter Einstellungen → KI-Modelle erneut aus, um es nochmal zu versuchen." +
-            (if (settings.gemmaBackend == "GPU" && !HfModels.isGpuFile(file) && !file.lowercase().startsWith("gemma")) " Tipp: Diese Datei ist nicht für den Grafikprozessor gebaut. " +
+            (if (!isGguf && settings.gemmaBackend == "GPU" && !HfModels.isGpuFile(file) && !file.lowercase().startsWith("gemma")) " Tipp: Diese Datei ist nicht für den Grafikprozessor gebaut. " +
                 "Lade unter Erkunden die Variante mit „gpu“ im Dateinamen." else "")
         voice.trimMemory() // speech model out of memory before a big load
-        de.foldki.app.data.DebugLog.write("LADE $file · ${settings.gemmaBackend} · ${if (HfModels.isGpuFile(file)) "GPU-Datei" else "keine GPU-Datei (GPU ohne Cache)"} · " +
+        de.foldki.app.data.DebugLog.write("LADE $file · " + (if (isGguf) "GGUF · GPU-Anteil ${settings.gpuPercent} %" else
+            "${settings.gemmaBackend} · ${if (HfModels.isGpuFile(file)) "GPU-Datei" else "keine GPU-Datei (GPU ohne Cache)"}") + " · " +
             "${LocalModelManager.gb(f.length())} · frei RAM ${freeRamMb()} MB")
         val t0 = System.currentTimeMillis()
-        val d = llm.loadAsync(f.absolutePath, settings.gemmaBackend == "GPU")
+        // Only one engine holds a model: free the other one first.
+        if (isGguf) llm.close() else gguf.close()
+        val d = if (isGguf) gguf.loadAsync(f.absolutePath, if (settings.gemmaBackend == "CPU") 0 else settings.gpuPercent)
+            else llm.loadAsync(f.absolutePath, settings.gemmaBackend == "GPU")
         llmBegin(); d.invokeOnCompletion { llmEnd() } // stays guarded until the native load really ends
         return try {
             val b = withTimeoutOrNull(600_000) { d.await() } ?: return "Das Modell lädt zu lange (über 10 Minuten). Bitte nochmal fragen."
@@ -729,7 +747,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 logHistory = history.size
                 if (isGitHubTask(prompt, history)) {
                     // GitHub only with a downloaded model on the phone (Nano cannot use tools).
-                    if (useNano || act.isBlank()) {
+                    if (HfModels.isGguf(act)) {
+                        editMessage(conv.id, botMsg.id) {
+                            it.copy(text = "GitHub-Werkzeuge gehen zurzeit nur mit LiteRT-Modellen (.litertlm), z. B. Gemma 4 E2B. Bitte so ein Modell wählen.")
+                        }
+                    } else if (useNano || act.isBlank()) {
                         editMessage(conv.id, botMsg.id) {
                             it.copy(text = "Für GitHub-Aufgaben bitte unter Einstellungen → KI-Modelle ein heruntergeladenes Modell wählen " +
                                 "(z. B. Gemma 4 E2B). Gemini Nano kann keine Werkzeuge benutzen.")
@@ -757,7 +779,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     finished = true
                     return@launch
                 }
-                val thinkOpen = !useNano && HfModels.isThinking(act)
+                var ggufThink = false
+                val thinkOpenName = !useNano && HfModels.isThinking(act)
                 val raw = StringBuilder()
                 var pieces = 0
                 var tFirst = 0L
@@ -765,7 +788,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     if (tFirst == 0L) tFirst = System.currentTimeMillis()
                     pieces++
                     raw.append(d)
-                    val sp = ThinkParser.split(raw.toString(), thinkOpen, finished = false)
+                    val sp = ThinkParser.split(raw.toString(), thinkOpenName || ggufThink, finished = false)
                     if (sp.thinking != _ui.value.thinking) _ui.update { it.copy(thinking = sp.thinking) }
                     editMessage(conv.id, botMsg.id) { it.copy(text = sp.answer, thoughts = sp.thoughts) }
                 }
@@ -774,6 +797,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     if (!_ui.value.nanoReady) throw IllegalStateException("Gemini Nano ist nicht bereit: ${_ui.value.nanoStatus}")
                     val limit = settings.answerLength.tokens
                     nano.reply(system, history, web).let { f -> if (limit > 0) f.take(limit) else f }.collect { onPiece(it) }
+                } else if (HfModels.isGguf(act)) withLocal {
+                    val budget = gguf.inputBudgetChars - system.length
+                    val webText = if (web) webFor(prompt).take(budget / 4) else ""
+                    val turns = history.filter { !it.isError && it.text.isNotBlank() }
+                    val last = turns.lastOrNull { it.role == Role.USER } ?: return@withLocal
+                    val earlier = turns.subList(0, turns.lastIndexOf(last)).takeLast(10).map { turnOf(it, budget / 3) }
+                        .map { (it.user) to it.text }
+                    val room = (budget * 0.8).toInt() - webText.length - last.text.length
+                    val own = turnOf(last, room.coerceAtLeast(0))
+                    val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + own.text
+                    de.foldki.app.data.DebugLog.write("START GGUF ${models.nameOf(act)} · ${gguf.backendUsed} · Kontext ${gguf.contextTokens} · Frage ${question.length}")
+                    var first = true
+                    gguf.chat(system, earlier, question, settings.creativity.temperature, settings.answerLength.tokens).collect {
+                        if (first) { first = false; ggufThink = gguf.thinkOpen }
+                        onPiece(it)
+                    }
                 } else withLocal {
                     // Everything must fit into the model's context – too much input closes the whole app natively.
                     val budget = llm.inputBudgetChars - system.length
@@ -796,14 +835,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     llm.chat(conv.id, system, earlier, question, last.id, botMsg.id, settings.creativity.temperature)
                         .let { f -> if (limit > 0) f.take(limit) else f }.collect { onPiece(it) }
                 }
-                val end = ThinkParser.split(raw.toString(), thinkOpen, finished = true)
+                val end = ThinkParser.split(raw.toString(), thinkOpenName || ggufThink, finished = true)
                 val now = System.currentTimeMillis()
                 editMessage(conv.id, botMsg.id) {
                     it.copy(
                         text = end.answer, thoughts = end.thoughts,
                         tokens = if (useNano) 0 else pieces, answerMs = now - t0,
                         tokPerSec = if (!useNano && pieces > 1 && now > tFirst) (pieces - 1) * 1000f / (now - tFirst) else 0f,
-                        backend = if (useNano) "AICore" else (llm.backendUsed ?: ""),
+                        backend = if (useNano) "AICore" else if (HfModels.isGguf(act)) (gguf.backendUsed ?: "") else (llm.backendUsed ?: ""),
                         cpuPct = if (useNano) -1 else cpu.average(),
                     )
                 }

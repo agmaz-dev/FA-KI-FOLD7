@@ -88,7 +88,7 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
             val crashed = vm.settings.llmCrashed == m.file
             SettingRow(
                 m.name,
-                LocalModelManager.gb(m.size) + " · " + m.source + if (crashed) " · hat die App beendet – tippen zum erneuten Versuch" else "",
+                LocalModelManager.gb(m.size) + " · " + (if (HfModels.isGguf(m.file)) "GGUF" else "LiteRT") + " · " + m.source + if (crashed) " · hat die App beendet – tippen zum erneuten Versuch" else "",
                 leading = { Tile(Icons.Default.Diamond, FK.T3) }, onClick = { vm.selectModel(m.file) },
             ) {
                 if (ui.activeModel == m.file) Icon(Icons.Default.Check, "Gewählt", tint = FK.Accent, modifier = Modifier.size(22.dp))
@@ -140,7 +140,26 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
                 }
                 FkButton("Modelle durchsuchen (passend zur App)", ghost = true) { vm.clearModelError(); openBrowser() }
                 FkButton("Eigene .litertlm importieren", ghost = true) { vm.clearModelError(); pick.launch(arrayOf("*/*")) }
-                Note("Nur .litertlm-Dateien (LiteRT-LM) laufen in Fold KI – .gguf und .task gehen nicht. Empfohlen: 4-Bit-Dateien bis ca. 3–4 GB.")
+                Note("Es laufen .litertlm (LiteRT-LM, GPU) und .gguf (llama.cpp, auch Dateien aus LM Studio). .task geht nicht. Empfohlen: 4-Bit bis ca. 3–4 GB.")
+            }
+        }
+    }
+
+    if (ui.localModels.any { HfModels.isGguf(it.file) }) {
+        SectionLabel("GGUF (llama.cpp)")
+        Group {
+            var pct by remember { mutableStateOf(vm.settings.gpuPercent.toFloat()) }
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Row {
+                    Text("GPU-Anteil", fontSize = 16.sp, color = FK.Text, modifier = Modifier.weight(1f))
+                    Text(if (pct.toInt() == 0) "nur Prozessor" else "${pct.toInt()} %", fontSize = 15.sp, color = FK.Muted)
+                }
+                androidx.compose.material3.Slider(
+                    value = pct, onValueChange = { pct = (it / 5).toInt() * 5f }, valueRange = 0f..100f,
+                    onValueChangeFinished = { vm.setGpuPercent(pct.toInt()) },
+                    colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = androidx.compose.ui.graphics.Color.White, activeTrackColor = FK.Accent, inactiveTrackColor = FK.Surface3),
+                )
+                Note("Anteil der Modell-Schichten auf dem Adreno-Grafikprozessor (OpenCL). Startwert 75 %.")
             }
         }
     }

@@ -516,7 +516,7 @@ private fun ModelSheet(ui: UiState, vm: ChatViewModel, onDismiss: () -> Unit, on
             SheetTitle("Modell wählen", "Alle Modelle laufen offline – alles bleibt auf dem Handy. Es antwortet nur das gewählte Modell.")
             SectionLabel("Auf dem Gerät", Modifier.offset(y = (-14).dp))
             ui.localModels.forEach { m ->
-                ModelOption(Icons.Default.Diamond, FK.T3, m.name, LocalModelManager.gb(m.size) + " · LiteRT-LM · GPU", ui.activeModel == m.file) {
+                ModelOption(Icons.Default.Diamond, FK.T3, m.name, LocalModelManager.gb(m.size) + if (de.foldki.app.ai.HfModels.isGguf(m.file)) " · GGUF · llama.cpp" else " · LiteRT · GPU", ui.activeModel == m.file) {
                     vm.selectModel(m.file); onDismiss()
                 }
             }

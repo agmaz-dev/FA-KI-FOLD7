@@ -19,7 +19,7 @@ object HfModels {
     ) {
         val fileName: String get() = path.substringAfterLast('/')
         /** Only .litertlm for the phone runtime; "web" files are built for browsers (WebGPU) and do not load here. */
-        val usable: Boolean get() = fileName.lowercase().let { it.endsWith(EXT) && !Regex("[_.-]web").containsMatchIn(it) }
+        val usable: Boolean get() = isUsable(fileName)
         /** Short hint from the file name: "4-Bit", "8-Bit", "16-Bit", "32-Bit" or "". */
         val bits: String get() = bitsOf(fileName)
         val url: String get() = resolveUrl(repo, path, revision)
@@ -31,6 +31,17 @@ object HfModels {
     fun isGpuFile(fileName: String): Boolean = Regex("gpu", RegexOption.IGNORE_CASE).containsMatchIn(fileName.substringAfterLast('/'))
 
     const val EXT = ".litertlm"
+    /** GGUF (llama.cpp, also LM Studio files). */
+    const val GGUF = ".gguf"
+
+    fun isGguf(fileName: String): Boolean = fileName.lowercase().endsWith(GGUF)
+
+    /** Model files Fold KI can run: .litertlm (not the browser "web" builds) and single .gguf files (no split parts, no mmproj). */
+    fun isUsable(fileName: String): Boolean {
+        val n = fileName.substringAfterLast('/').lowercase()
+        return (n.endsWith(EXT) && !Regex("[_.-]web").containsMatchIn(n)) ||
+            (n.endsWith(GGUF) && !Regex("-\\d{5}-of-\\d{5}").containsMatchIn(n) && !n.contains("mmproj"))
+    }
     private val OTHER_EXT = listOf(".task", ".tflite", ".gguf", ".bin")
 
     /** First path segments that are HF pages, not "owner/model". */
@@ -96,6 +107,7 @@ object HfModels {
     /** Proposal: the smallest 4-bit .litertlm, else the smallest .litertlm. */
     fun recommend(files: List<LmFile>): LmFile? {
         val usable = files.filter { it.usable }.let { u -> u.filter { it.forGpu }.ifEmpty { u } } // GPU builds first
+        usable.firstOrNull { isGguf(it.fileName) && it.fileName.lowercase().contains("q4_k_m") }?.let { return it } // GGUF: Q4_K_M like FA Fold KI
         return usable.filter { it.bits == "4-Bit" }.minByOrNull { it.size } ?: usable.minByOrNull { it.size }
     }
 
@@ -104,6 +116,10 @@ object HfModels {
         return when {
             Regex("int4|q4|wi4|4bit").containsMatchIn(n) -> "4-Bit"
             Regex("int8|q8|wi8|8bit").containsMatchIn(n) -> "8-Bit"
+            Regex("q5_|q5k|5bit").containsMatchIn(n) -> "5-Bit"
+            Regex("q6_|q6k|6bit").containsMatchIn(n) -> "6-Bit"
+            Regex("q3_|q3k|3bit").containsMatchIn(n) -> "3-Bit"
+            Regex("q2_|q2k|2bit").containsMatchIn(n) -> "2-Bit"
             Regex("f16|fp16|bf16").containsMatchIn(n) -> "16-Bit"
             Regex("f32|fp32").containsMatchIn(n) -> "32-Bit"
             else -> ""
@@ -116,7 +132,7 @@ object HfModels {
     /** Display name for a downloaded file, e.g. "Qwen3-4B-Thinking-2507 · 4-Bit". */
     fun displayName(fileName: String): String {
         if (fileName == LocalModelManager.GEMMA_FILE) return "Gemma 4 E2B"
-        val base = fileName.removeSuffix(EXT).removeSuffix(EXT.uppercase())
+        val base = fileName.removeSuffix(EXT).removeSuffix(EXT.uppercase()).removeSuffix(GGUF).removeSuffix(GGUF.uppercase())
         val b = bitsOf(base)
         return if (b.isNotEmpty()) "$base · $b" else base
     }
@@ -199,6 +215,13 @@ object HfModels {
 
     /** All usable LiteRT-LM models of litert-community, sorted by [sort] (network; call off the main thread). */
     fun fetchOfficial(sort: String = "downloads"): List<Repo> = get(officialUrl(sort)) { parseRepos(it, keepOrder = true) }
+
+    /** GGUF models on Hugging Face (llama.cpp, the same files LM Studio uses), optionally searched by [search]. */
+    fun ggufUrl(sort: String = "downloads", search: String = ""): String =
+        "https://huggingface.co/api/models?library=gguf&full=true&sort=$sort&direction=-1&limit=200" +
+            if (search.isBlank()) "" else "&search=" + URLEncoder.encode(search.trim(), "UTF-8")
+
+    fun fetchGguf(sort: String = "downloads", search: String = ""): List<Repo> = get(ggufUrl(sort, search)) { parseRepos(it, keepOrder = true) }
 
     /** Info of any repo (also from other uploaders) for the detail page. */
     fun fetchRepo(id: String): Repo = get("https://huggingface.co/api/models/$id") { repoOf(org.json.JSONObject(it)) ?: throw IllegalStateException("Modell nicht gefunden.") }

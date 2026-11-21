@@ -12,10 +12,25 @@ android {
         applicationId = "de.foldki.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 44
-        versionName = "4.0"
+        versionCode = 45
+        versionName = "4.1"
         // Galaxy Z Fold7 and all current phones are 64-bit ARM; keeps the APK small.
         ndk { abiFilters += "arm64-v8a" }
+        // GGUF models: llama.cpp (from FA Fold KI), always optimised, 16 KB pages, shared C++ runtime
+        // (llama/ggml are several libraries; the compute parts CPU + GPU/OpenCL are loaded at runtime).
+        externalNativeBuild {
+            cmake {
+                arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_STL=c++_shared", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
+                cppFlags += listOf("-O3")
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     // Fixed key, committed on purpose: every build must carry the same signature,
@@ -45,6 +60,13 @@ android {
     buildFeatures { compose = true }
 
     packaging {
+        jniLibs {
+            // Unpacked into nativeLibraryDir, so llama.cpp finds its compute parts (libggml-cpu.so, libggml-opencl.so).
+            useLegacyPackaging = true
+            // Only needed for linking: at runtime the phone's own OpenCL (/vendor/lib64/libOpenCL.so) must be used.
+            excludes += "**/libOpenCL.so"
+            pickFirsts += "**/libc++_shared.so"
+        }
         resources {
             excludes += setOf(
                 "/META-INF/{AL2.0,LGPL2.1}",

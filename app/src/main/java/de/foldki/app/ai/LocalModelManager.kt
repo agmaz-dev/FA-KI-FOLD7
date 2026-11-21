@@ -76,7 +76,7 @@ class LocalModelManager(context: Context) {
     private fun scanModels() {
         val m = meta()
         _models.value = (dir.listFiles() ?: emptyArray())
-            .filter { it.isFile && it.name.lowercase().endsWith(HfModels.EXT) }
+            .filter { it.isFile && (it.name.lowercase().endsWith(HfModels.EXT) || it.name.lowercase().endsWith(HfModels.GGUF)) }
             .sortedBy { it.name.lowercase() }
             .map { f ->
                 val o = m.optJSONObject(f.name)
@@ -100,7 +100,7 @@ class LocalModelManager(context: Context) {
     /** Starts the download of one .litertlm file. Returns null or an error text (shown by the caller). */
     fun download(f: HfModels.LmFile): String? {
         if (busy) return "Es läuft schon ein Download oder Import."
-        if (!f.usable) return "Diese Datei ist keine .litertlm-Datei. Fold KI kann nur LiteRT-LM-Modelle (.litertlm) laden."
+        if (!f.usable) return "Diese Datei kann Fold KI nicht laden. Es gehen .litertlm (LiteRT-LM) und einzelne .gguf-Dateien (llama.cpp)."
         val name = f.fileName
         if (fileOf(name).exists() && (f.size <= 0 || fileOf(name).length() == f.size)) {
             scanModels(); onAdded?.invoke(name); return null
@@ -252,7 +252,7 @@ class LocalModelManager(context: Context) {
             }
         }
         name = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-        if (!name.lowercase().endsWith(HfModels.EXT)) { _state.value = State.Failed("Bitte eine .litertlm-Datei wählen („$name“ ist keine)."); return }
+        if (!HfModels.isUsable(name)) { _state.value = State.Failed("Bitte eine .litertlm- oder .gguf-Datei wählen („$name“ geht nicht)."); return }
         if (size > 0 && freeBytes() < size + RESERVE) { _state.value = State.Failed("Zu wenig Speicher: ${gb(size + RESERVE)} nötig, frei sind ${gb(freeBytes())}."); return }
         val tmp = File(dir, "$name.import")
         _state.value = State.Importing(name, 0)

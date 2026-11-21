@@ -36,6 +36,14 @@ class HfModelsTest {
         assertFalse(files[1].forGpu)
     }
 
+    @Test fun ggufFiles() {
+        assertTrue(HfModels.isUsable("Qwen3-4B-Q4_K_M.gguf"))
+        assertFalse(HfModels.isUsable("Qwen3-30B-Q4_K_M-00001-of-00003.gguf"))
+        assertFalse(HfModels.isUsable("mmproj-model-f16.gguf"))
+        assertEquals("4-Bit", HfModels.bitsOf("Qwen3-4B-Q4_K_M.gguf"))
+        assertEquals("Qwen3-4B-Q4_K_M · 4-Bit", HfModels.displayName("Qwen3-4B-Q4_K_M.gguf"))
+    }
+
     @Test fun urls() {
         assertEquals("litert-community/Qwen3-4B", HfModels.repoFromUrl("https://huggingface.co/litert-community/Qwen3-4B/tree/main"))
         assertNull(HfModels.repoFromUrl("https://huggingface.co/models?search=litert"))

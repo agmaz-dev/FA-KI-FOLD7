@@ -70,6 +70,11 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("show_thoughts", true)
         set(v) = prefs.edit().putBoolean("show_thoughts", v).apply()
 
+    /** GGUF (llama.cpp): share of the layers on the GPU in percent (0 = CPU only). Start 75 % like FA Fold KI. */
+    var gpuPercent: Int
+        get() = prefs.getInt("gpu_percent", 75)
+        set(v) = prefs.edit().putInt("gpu_percent", v.coerceIn(0, 100)).apply()
+
     var showStats: Boolean
         get() = prefs.getBoolean("show_stats", true)
         set(v) = prefs.edit().putBoolean("show_stats", v).apply()
