@@ -19,7 +19,7 @@ class LetterMetaTest {
         Aktenzeichen: 123-BG-4567
 
         Betreff: Aufhebungsbescheid
-        Sehr geehrter Frau Fischer,
+        Sehr geehrte Frau Fischer,
         bitte reichen Sie die Unterlagen bis zum 30.11.2026 ein.
         Ihr Geburtsdatum: 01.02.1980
     """.trimIndent()

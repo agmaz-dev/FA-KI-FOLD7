@@ -37,7 +37,7 @@ data class SenderProfile(
         const val EXTRA_MAX = 200
         private val TITLES = setOf("dr", "prof", "dipl", "ing", "med", "herr", "frau", "mag", "von", "van", "de", "der", "zu")
 
-        /** "Paula Fischer" -> "FA", "Dr. Max von Muster" -> "MM", "Muster GmbH" -> "MG". */
+        /** "Paula Fischer" -> "PF", "Dr. Max von Muster" -> "MM", "Muster GmbH" -> "MG". */
         fun initialsOf(name: String): String {
             val words = name.trim().split(Regex("[\\s,]+")).map { it.trim('.', '-', '(', ')') }
                 .filter { it.isNotEmpty() && it.lowercase().trimEnd('.') !in TITLES && it.first().isLetter() }

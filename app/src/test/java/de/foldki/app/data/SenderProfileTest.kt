@@ -8,7 +8,7 @@ import org.junit.Test
 class SenderProfileTest {
 
     @Test fun initialsFromName() {
-        assertEquals("FA", SenderProfile.initialsOf("Paula Fischer"))
+        assertEquals("PF", SenderProfile.initialsOf("Paula Fischer"))
         assertEquals("MM", SenderProfile.initialsOf("Dr. Max von Muster"))
         assertEquals("EM", SenderProfile.initialsOf("Erika Maria Mustermann"))
         assertEquals("MU", SenderProfile.initialsOf("Muster"))
@@ -17,9 +17,9 @@ class SenderProfileTest {
 
     @Test fun manualInitialsWin() {
         val p = SenderProfile(name = "Paula Fischer")
-        assertEquals("FA", p.effectiveInitials)
+        assertEquals("PF", p.effectiveInitials)
         assertEquals("FAg", p.copy(initials = "FAg", initialsManual = true).effectiveInitials)
-        assertEquals("FA", p.copy(initials = "", initialsManual = true).effectiveInitials)
+        assertEquals("PF", p.copy(initials = "", initialsManual = true).effectiveInitials)
     }
 
     @Test fun migrationIsLossless() {
@@ -37,7 +37,7 @@ class SenderProfileTest {
 
     @Test fun promptBlockSkipsEmptyFieldsAndHasInitials() {
         val p = SenderProfile(label = "Privat", name = "Paula Fischer", street = "Lindenweg 3", zipCity = "10115 Berlin")
-        assertEquals("Absender (aktiv):\nPaula Fischer\nLindenweg 3\n10115 Berlin\nInitialen: FA", SenderProfile.promptBlock(p))
+        assertEquals("Absender (aktiv):\nPaula Fischer\nLindenweg 3\n10115 Berlin\nInitialen: PF", SenderProfile.promptBlock(p))
         assertFalse(SenderProfile.promptBlock(p).contains("Privat"))
     }
 
