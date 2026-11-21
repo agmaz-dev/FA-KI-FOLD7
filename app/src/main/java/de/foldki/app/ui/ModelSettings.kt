@@ -3,6 +3,10 @@ package de.foldki.app.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -41,6 +45,7 @@ import de.foldki.app.data.Settings
  * Hugging Face, import own files, delete, CPU test switch. Only the chosen model answers – nothing jumps in.
  * Stacked, full width – works folded (cover screen) and unfolded.
  */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openNano: () -> Unit) {
     var confirmDelete by remember { mutableStateOf<LocalModelManager.LocalModel?>(null) }
@@ -81,33 +86,49 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
     }
     Note("Es antwortet nur das gewählte Modell – kein anderes springt ein.", Modifier.padding(horizontal = 6.dp, vertical = 8.dp))
 
-    SectionLabel("Gewähltes Modell")
-    Group {
-        ui.localModels.forEachIndexed { i, m ->
-            if (i > 0) GroupDivider()
-            val crashed = vm.settings.llmCrashed == m.file
-            SettingRow(
-                m.name,
-                LocalModelManager.gb(m.size) + " · " + (if (HfModels.isGguf(m.file)) "GGUF" else "LiteRT") + " · " + m.source + if (crashed) " · hat die App beendet – tippen zum erneuten Versuch" else "",
-                leading = { Tile(Icons.Default.Diamond, FK.T3) }, onClick = { vm.selectModel(m.file) },
-            ) {
-                if (ui.activeModel == m.file) Icon(Icons.Default.Check, "Gewählt", tint = FK.Accent, modifier = Modifier.size(22.dp))
-                else Text("Löschen", color = FK.Muted, fontSize = 13.sp, modifier = Modifier.clickable { confirmDelete = m }.padding(8.dp))
+    Segmented(listOf("Auf dem Handy", "Erkunden"), 0, Modifier.padding(top = 4.dp, bottom = 4.dp)) { if (it == 1) openBrowser() }
+    SectionLabel("Modelle")
+    ui.localModels.forEach { m ->
+        val active = ui.activeModel == m.file
+        val crashed = vm.settings.llmCrashed == m.file
+        val gguf = HfModels.isGguf(m.file)
+        Card(Modifier.padding(bottom = 12.dp).clickable { vm.selectModel(m.file) }, border = if (active) FK.Ok else null) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                ModelLogo(HfModels.vendorOf(m.file), 36.dp)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(m.name, fontSize = 17.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, color = FK.Text, maxLines = 2)
+                    Text(HfModels.vendorOf(m.file) + " · " + m.source, fontSize = 13.sp, color = FK.Muted, maxLines = 1)
+                }
+                if (active) Pill("Aktiv", FK.Ok)
+            }
+            androidx.compose.foundation.layout.FlowRow(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (gguf) Pill("GGUF · llama.cpp", FK.Warn) else Pill("LiteRT", FK.Muted)
+                if (!gguf && (HfModels.isGpuFile(m.file) || m.file.lowercase().startsWith("gemma"))) Pill("GPU", FK.Accent)
+                if (gguf) Pill("GPU ${vm.settings.gpuPercent} %", FK.Accent)
+                if (HfModels.isThinking(m.file)) Pill("Denken", FK.Purple)
+                if (crashed) Pill("hat die App beendet", FK.Danger)
+            }
+            Row(Modifier.padding(top = 12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text(LocalModelManager.gb(m.size), fontSize = 13.sp, color = FK.Muted, modifier = Modifier.weight(1f))
+                if (!active) Text("Wählen", color = androidx.compose.ui.graphics.Color.White, fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    modifier = Modifier.clip(RoundedCornerShape(18.dp)).background(FK.Accent).clickable { vm.selectModel(m.file) }.padding(horizontal = 16.dp, vertical = 7.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Löschen", color = FK.Danger, fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    modifier = Modifier.clip(RoundedCornerShape(18.dp)).background(FK.Surface2).clickable { confirmDelete = m }.padding(horizontal = 16.dp, vertical = 7.dp))
             }
         }
-        if (ui.localModels.isNotEmpty()) GroupDivider()
-        SettingRow(
-            "Gemini Nano", if (ui.usesNano) "im Handy eingebaut · " + ui.nanoStatus else "im Handy eingebaut (AICore) · tippen zum Auswählen",
-            leading = { Tile(Icons.Default.PhoneAndroid, FK.T1) }, onClick = { vm.selectModel(Settings.NANO); if (!ui.nanoReady) openNano() },
-        ) {
-            if (ui.usesNano) Icon(Icons.Default.Check, "Gewählt", tint = FK.Accent, modifier = Modifier.size(22.dp))
-        }
     }
-    ui.activeLocal?.let { m ->
-        Text(
-            "Löschen von ${m.name}", color = FK.Muted, fontSize = 13.sp,
-            modifier = Modifier.padding(start = 6.dp, top = 8.dp).clickable { confirmDelete = m }.padding(6.dp),
-        )
+    Card(Modifier.padding(bottom = 4.dp).clickable { vm.selectModel(Settings.NANO); if (!ui.nanoReady) openNano() }, border = if (ui.usesNano) FK.Ok else null) {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            ModelLogo("Google", 36.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Gemini Nano", fontSize = 17.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, color = FK.Text)
+                Text(if (ui.usesNano) "im Handy eingebaut · " + ui.nanoStatus else "im Handy eingebaut (AICore)", fontSize = 13.sp, color = FK.Muted, maxLines = 2)
+            }
+            if (ui.usesNano) Pill("Aktiv", FK.Ok)
+        }
     }
 
     SectionLabel("Herunterladen")

@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Visibility
@@ -500,10 +501,17 @@ private fun VoicePage(
     vm: ChatViewModel, stStatus: String, stBusy: Boolean, stReady: Boolean,
     stVoice: String, setVoice: (String) -> Unit, rate: Float, setRate: (Float) -> Unit,
 ) {
-    PageHeader(
-        Icons.AutoMirrored.Filled.VolumeUp, FK.T4, if (stReady) "Eingerichtet" else "Noch nicht eingerichtet",
-        "Sprechen und Zuhören laufen komplett auf dem Handy, ohne Samsung- oder Google-Dienste.",
-    )
+    Note("Vorlesen mit Supertonic 3 – offline auf dem Handy, ohne Samsung- oder Google-Dienste.", Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    SectionLabel("Modell")
+    Group {
+        SettingRow("Supertonic 3", if (stReady) "eingerichtet · ca. 250 MB" else "noch nicht eingerichtet", leading = { Tile(Icons.AutoMirrored.Filled.VolumeUp, FK.T5) }) {
+            if (stReady) Pill("Bereit", FK.Ok) else Pill("Fehlt", FK.Warn)
+        }
+        GroupDivider()
+        SettingRow("Whisper small", "Spracheingabe auf dem Handy", leading = { Tile(Icons.Default.Mic, FK.T5) }) {
+            if (stReady) Pill("Installiert", FK.Ok)
+        }
+    }
     if (!stReady || stBusy) {
         Spacer(Modifier.height(14.dp))
         Note(stStatus, Modifier.padding(horizontal = 6.dp))
@@ -518,13 +526,31 @@ private fun VoicePage(
     Group {
         Supertonic.VOICES.entries.forEachIndexed { i, (id, v) ->
             if (i > 0) GroupDivider()
-            SettingRow(v.second, null, leading = {
-                RadioButton(selected = stVoice == id, onClick = { setVoice(id) }, colors = RadioButtonDefaults.colors(selectedColor = FK.Accent))
-            }, onClick = { setVoice(id) }) {
-                IconButton(
-                    enabled = vm.voice.supertonic.isReady && !stBusy,
-                    onClick = { vm.voice.rate = rate; vm.voice.previewSupertonic(id) { vm.notify("Stimme: $it") } },
-                ) { Icon(Icons.Default.PlayArrow, "Probehören", tint = FK.Muted) }
+            val female = id == "tessa"
+            Row(
+                Modifier.fillMaxWidth().clickable { setVoice(id) }.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier.size(44.dp).clip(androidx.compose.foundation.shape.CircleShape).background(
+                        androidx.compose.ui.graphics.Brush.linearGradient(
+                            if (female) listOf(androidx.compose.ui.graphics.Color(0xFFFF375F), FK.Warn) else listOf(FK.Accent, FK.T7.first),
+                        ),
+                    ),
+                    contentAlignment = Alignment.Center,
+                ) { Text(v.second.take(1), color = androidx.compose.ui.graphics.Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp) }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(v.second.substringBefore(" ("), fontSize = 16.sp, color = FK.Text)
+                    Text(if (female) "weiblich · Standard" else "männlich", fontSize = 13.sp, color = FK.Muted)
+                }
+                Box(
+                    Modifier.size(32.dp).clip(androidx.compose.foundation.shape.CircleShape).background(FK.Surface2)
+                        .clickable(enabled = vm.voice.supertonic.isReady && !stBusy) { vm.voice.rate = rate; vm.voice.previewSupertonic(id) { vm.notify("Stimme: $it") } },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.Default.PlayArrow, "Probehören", tint = FK.Accent, modifier = Modifier.size(18.dp)) }
+                Spacer(Modifier.width(12.dp))
+                Box(Modifier.size(22.dp)) { if (stVoice == id) Icon(Icons.Default.Check, "Gewählt", tint = FK.Accent, modifier = Modifier.size(22.dp)) }
             }
         }
     }

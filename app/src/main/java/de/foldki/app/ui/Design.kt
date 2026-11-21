@@ -22,6 +22,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -145,6 +147,46 @@ fun Segmented(options: List<String>, selected: Int, modifier: Modifier = Modifie
     }
 }
 
+/** Grey search field with a magnifier (like iOS). */
+@Composable
+fun SearchBox(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier = Modifier) {
+    Row(
+        modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(10.dp)).background(FK.Surface).padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(androidx.compose.material.icons.Icons.Default.Search, null, tint = FK.Dim, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.weight(1f)) {
+            if (value.isEmpty()) Text(hint, color = FK.Dim, fontSize = 16.sp, maxLines = 1)
+            androidx.compose.foundation.text.BasicTextField(
+                value, onChange, singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(fontFamily = Inter, fontSize = 16.sp, color = FK.Text),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(FK.Accent), modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (value.isNotEmpty()) Icon(androidx.compose.material.icons.Icons.Default.Close, "Leeren", tint = FK.Dim,
+            modifier = Modifier.size(18.dp).clickable { onChange("") })
+    }
+}
+
+/** Letter logo of a model maker (gradient tile, like the mock-up). */
+@Composable
+fun ModelLogo(vendor: String, size: Dp = 36.dp) {
+    val colors = when (vendor) {
+        "Google" -> listOf(Color(0xFF4285F4), Color(0xFF9B72CB))
+        "Alibaba" -> listOf(Color(0xFF615CED), Color(0xFF8B5CF6))
+        "DeepSeek" -> listOf(Color(0xFF0F766E), Color(0xFF14B8A6))
+        "Microsoft" -> listOf(Color(0xFFF97316), Color(0xFFFACC15))
+        "Meta" -> listOf(Color(0xFF0668E1), Color(0xFF00C6FF))
+        "Mistral" -> listOf(Color(0xFFFF7000), Color(0xFFFFB000))
+        else -> listOf(Color(0xFF636366), Color(0xFF8E8E93))
+    }
+    Box(
+        Modifier.size(size).clip(RoundedCornerShape(size * 0.28f)).background(androidx.compose.ui.graphics.Brush.linearGradient(colors)),
+        contentAlignment = Alignment.Center,
+    ) { Text(vendor.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.42f).sp) }
+}
+
 /** Card with rounded corners (models, memory). [border] e.g. green for the active model. */
 @Composable
 fun Card(modifier: Modifier = Modifier, border: Color? = null, content: @Composable ColumnScope.() -> Unit) {
@@ -189,18 +231,18 @@ fun RoundOutline(onClick: () -> Unit, content: @Composable () -> Unit) {
     ) { content() }
 }
 
-/** Filled 36-dp capsule chip (Web, suggestions). */
+/** Filled 34-dp capsule chip (filters, suggestions): white when chosen, like the mock-up. */
 @Composable
 fun FkChip(text: String, icon: ImageVector? = null, active: Boolean = false, onClick: () -> Unit) {
     Row(
-        Modifier.height(36.dp).clip(RoundedCornerShape(18.dp))
-            .background(if (active) FK.AccentSoft else FK.Surface)
+        Modifier.height(34.dp).clip(RoundedCornerShape(17.dp))
+            .background(if (active) Color.White else FK.Surface)
             .clickable(onClick = onClick).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (icon != null) Icon(icon, null, tint = if (active) FK.Accent else FK.Muted, modifier = Modifier.size(16.dp))
-        Text(text, fontSize = 13.sp, color = if (active) FK.Accent else FK.Muted, maxLines = 1)
+        if (icon != null) Icon(icon, null, tint = if (active) Color.Black else FK.Muted, modifier = Modifier.size(16.dp))
+        Text(text, fontSize = 14.sp, color = if (active) Color.Black else FK.Text, maxLines = 1)
     }
 }
 

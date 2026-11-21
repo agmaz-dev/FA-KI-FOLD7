@@ -6,6 +6,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -82,9 +83,12 @@ fun HfBrowser(vm: ChatViewModel, ui: UiState, onDone: () -> Unit) {
     var web by rememberSaveable { mutableStateOf(false) }
     var detail by rememberSaveable { mutableStateOf<String?>(null) }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FkChip("Suche", active = !web) { web = false }
-            FkChip("huggingface.co", active = web) { web = true }
+        // Like the mock-up: one button to the real web page (and back), the search is the normal view.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), horizontalArrangement = Arrangement.End) {
+            Text(
+                if (web) "‹ Zurück zur Suche" else "huggingface.co ↗", color = FK.Accent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clip(RoundedCornerShape(18.dp)).background(FK.Surface2).clickable { web = !web }.padding(horizontal = 14.dp, vertical = 8.dp),
+            )
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (web) WebMode(vm, onOpen = { repo -> detail = repo; web = false })
@@ -115,9 +119,9 @@ private fun SearchMode(vm: ChatViewModel, ui: UiState, detail: String?, onDetail
         val wide = maxWidth >= 600.dp
         val list: @Composable (Modifier) -> Unit = { mod ->
             Column(mod) {
-                Segmented(listOf("LiteRT · GPU", "GGUF"), fmt, Modifier.padding(horizontal = 14.dp, vertical = 6.dp)) { fmt = it }
-                FkField("Suchen (z. B. qwen, gemma, deepseek)", query, { query = it })
-                Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SearchBox(query, { query = it }, "Modelle suchen", Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp))
+                Segmented(listOf("LiteRT · GPU", "GGUF"), fmt, Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) { fmt = it }
+                Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     HfModels.SORTS.forEach { (k, label) -> FkChip(label, active = sort == k) { sort = k } }
                 }
                 val all = repos
@@ -132,14 +136,13 @@ private fun SearchMode(vm: ChatViewModel, ui: UiState, detail: String?, onDetail
                         val q = query.trim().lowercase()
                         val shown = if (q.isEmpty() || fmt == 1) all else all.filter { it.name.lowercase().contains(q) }
                         Note(
-                            if (fmt == 1) "${shown.size} GGUF-Modelle (llama.cpp, wie LM Studio). Laden mit GPU-Anteil, Q4_K_M empfohlen."
-                            else "${shown.size} Modelle von Googles litert-community – passen zur App. Funktionen sind aus den Schlagworten geschätzt.",
+                            if (fmt == 1) "${shown.size} GGUF-Modelle · llama.cpp" else "${shown.size} Modelle · litert-community",
                             Modifier.padding(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 6.dp),
                         )
                         LazyVerticalGrid(
                             columns = GridCells.Adaptive(160.dp),
                             modifier = Modifier.weight(1f).fillMaxWidth(),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
@@ -166,22 +169,29 @@ private fun SearchMode(vm: ChatViewModel, ui: UiState, detail: String?, onDetail
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 private fun RepoCard(r: HfModels.Repo, have: Boolean, active: Boolean, onClick: () -> Unit) {
     val shape = RoundedCornerShape(16.dp)
     Column(
-        Modifier.fillMaxWidth().heightIn(min = 118.dp).background(if (active) FK.AccentSoft else FK.Surface, shape)
-            .border(1.dp, if (active || have) FK.Accent else FK.Line, shape).clickable(onClick = onClick).padding(14.dp),
+        Modifier.fillMaxWidth().clip(shape).background(FK.Surface)
+            .then(if (active) Modifier.border(1.5.dp, FK.Accent, shape) else Modifier).clickable(onClick = onClick).padding(14.dp),
     ) {
-        Text(r.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 3, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.height(6.dp))
+        ModelLogo(HfModels.vendorOf(r.id), 36.dp)
+        Spacer(Modifier.height(10.dp))
+        Text(HfModels.prettyName(r.name), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = FK.Text, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(
-            fmtNum(r.downloads) + " Downloads" + (if (r.parameter.isNotEmpty()) " · ${r.parameter}" else ""),
-            fontSize = 11.sp, color = FK.Muted, maxLines = 1,
+            HfModels.vendorOf(r.id) + " · " + fmtNum(r.downloads) + " Downloads",
+            fontSize = 12.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
-        Row(Modifier.padding(top = 8.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (have) Tag("installiert", on = true)
-            r.features.forEach { Tag(it) }
+        androidx.compose.foundation.layout.FlowRow(
+            Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (have) Pill("Installiert", FK.Ok)
+            if (r.usableFiles.any { HfModels.isGpuFile(it) } || (r.official && r.name.lowercase().startsWith("gemma"))) Pill("GPU", FK.Accent)
+            if (r.usableFiles.any { HfModels.isGguf(it) }) Pill("GGUF", FK.Warn)
+            r.features.forEach { f -> Pill(f, if (f == "Denken") FK.Purple else FK.Muted) }
+            if (r.parameter.isNotEmpty()) Pill(r.parameter, FK.Muted)
         }
     }
 }
@@ -210,22 +220,32 @@ private fun Detail(vm: ChatViewModel, ui: UiState, id: String, onClose: (() -> U
             IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück zur Liste", tint = FK.Text) }
             Text("Zurück zur Liste", fontSize = 13.sp, color = FK.Muted)
         }
-        Text(id.substringAfter('/'), fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = FK.Text)
-        Text(id, fontSize = 12.sp, color = FK.Muted)
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+            ModelLogo(HfModels.vendorOf(id), 60.dp)
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(HfModels.prettyName(id.substringAfter('/')), fontSize = 26.sp, fontWeight = FontWeight.Bold, color = FK.Text, lineHeight = 30.sp)
+                Text(HfModels.vendorOf(id) + " · " + id.substringBefore('/'), fontSize = 13.sp, color = FK.Muted)
+            }
+        }
         val r = repo
         if (error != null) { Spacer(Modifier.height(12.dp)); Text("Details nicht ladbar: $error", color = ERR, fontSize = 13.sp); return@Column }
         if (r == null) { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = FK.Accent) }; return@Column }
 
-        Row(Modifier.padding(top = 10.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Stat("Downloads", fmtNum(r.downloads)); Stat("Likes", fmtNum(r.likes))
-            ago(r.updated).takeIf { it.isNotEmpty() }?.let { Stat("Aktualisiert", it) }
+        Row(Modifier.padding(top = 12.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            r.features.forEach { f -> Pill(f, if (f == "Denken") FK.Purple else FK.Muted) }
+        }
+        Row(Modifier.padding(top = 12.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(FK.Surface).padding(vertical = 12.dp)) {
+            Stat("Downloads", fmtNum(r.downloads), Modifier.weight(1f))
+            Stat("Parameter", r.parameter.ifEmpty { "–" }, Modifier.weight(1f))
+            Stat("Aktualisiert", ago(r.updated).ifEmpty { "–" }, Modifier.weight(1f))
         }
         if (!r.official) Text(
             "Nicht von Google (litert-community) umgewandelt – läuft in der App vielleicht nicht.",
             color = WARN, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp),
         )
 
-        SectionLabel("Download-Optionen")
+        SectionLabel("Dateien")
         when (val st = ui.modelOp) {
             is LocalModelManager.State.Downloading -> {
                 Text("Lädt ${HfModels.displayName(st.name)}… ${st.pct} %", fontSize = 13.sp, color = FK.Text)
@@ -247,16 +267,16 @@ private fun Detail(vm: ChatViewModel, ui: UiState, id: String, onClose: (() -> U
             all.forEachIndexed { i, f ->
                 if (i > 0) GroupDivider()
                 Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    Text(f.fileName, fontSize = 13.sp, color = if (f.usable) FK.Text else FK.Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(f.fileName, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = if (f.usable) FK.Text else FK.Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Row(Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(LocalModelManager.gb(f.size), fontSize = 12.sp, color = FK.Muted)
-                        if (f.bits.isNotEmpty()) Tag(f.bits)
-                        if (f.usable && f.forGpu) Tag("GPU", on = true)
+                        if (f.bits.isNotEmpty()) Pill(f.bits, FK.Muted)
+                        if (f.usable && f.forGpu) Pill("GPU", FK.Accent)
                         else if (f.usable && usable.any { it.forGpu }) Text("für Prozessor gebaut", fontSize = 11.sp, color = WARN)
                         if (f.usable) {
                             val (fit, level) = HfModels.fitText(ram, f.size)
                             if (fit.isNotEmpty()) Text(fit, fontSize = 11.sp, color = when (level) { 1 -> FK.Ok; 2 -> WARN; else -> ERR })
-                            if (f == rec) Tag("Empfohlen", on = true)
+                            if (f == rec) Pill("Empfohlen", FK.Ok)
                         } else Text("anderes Format – geht nicht", fontSize = 11.sp, color = FK.Muted)
                     }
                     if (f.usable) Box(Modifier.padding(top = 8.dp)) {
@@ -292,10 +312,10 @@ private fun Detail(vm: ChatViewModel, ui: UiState, id: String, onClose: (() -> U
 }
 
 @Composable
-private fun Stat(k: String, v: String) {
-    Column(Modifier.background(FK.Surface, RoundedCornerShape(12.dp)).border(1.dp, FK.Line, RoundedCornerShape(12.dp)).padding(horizontal = 12.dp, vertical = 8.dp)) {
-        Text(k, fontSize = 10.sp, color = FK.Muted)
-        Text(v, fontSize = 14.sp, color = FK.Text, fontWeight = FontWeight.Medium)
+private fun Stat(k: String, v: String, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(v, fontSize = 17.sp, color = FK.Text, fontWeight = FontWeight.Bold, maxLines = 1)
+        Text(k, fontSize = 12.sp, color = FK.Muted, maxLines = 1)
     }
 }
 

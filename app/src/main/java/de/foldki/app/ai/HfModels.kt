@@ -163,6 +163,30 @@ object HfModels {
         val parameter: String get() = parameterOf(id)
     }
 
+    /** Readable name: "gemma-4-E2B-it-litert-lm" → "Gemma 4 E2B", "Qwen2.5-1.5B-Instruct" → "Qwen2.5 1.5B Instruct". */
+    fun prettyName(name: String): String {
+        var n = name
+        listOf("-litert-lm", "_litert_lm", "-litert", "-LiteRT", "-GGUF", "_GGUF", "-gguf", "-it").forEach { n = n.removeSuffix(it) }
+        n = n.replace(Regex("[-_]it(?=[-_]|$)"), "").replace('-', ' ').replace('_', ' ').replace(Regex("\\s+"), " ").trim()
+        return n.replaceFirstChar { it.uppercase() }
+    }
+
+    /** Maker of a model, from the name (for the card: "Google · 2,6 GB"). */
+    fun vendorOf(id: String): String {
+        val n = id.lowercase()
+        return when {
+            "gemma" in n || "gemini" in n -> "Google"
+            "qwen" in n || "qwq" in n -> "Alibaba"
+            "deepseek" in n -> "DeepSeek"
+            "phi" in n -> "Microsoft"
+            "llama" in n -> "Meta"
+            "mistral" in n || "ministral" in n -> "Mistral"
+            "smol" in n -> "Hugging Face"
+            "internvl" in n -> "OpenGVLab"
+            else -> id.substringBefore('/')
+        }
+    }
+
     /** Google's own conversions for LiteRT-LM – these are built for the runtime in the app. */
     const val OFFICIAL = "litert-community"
 
