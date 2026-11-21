@@ -24,6 +24,14 @@
 ## Logo (ab 4.4)
 - Überall das FA-KI-Logo aus FA KI Desktop (`src/logo.svg`, Zweig feature/agent-erkunden): App-Symbol (`mipmap-anydpi-v26/ic_launcher.xml`, Hintergrund `drawable/ic_launcher_background.xml`, Zeichen `drawable-nodpi/ic_launcher_fg.png`) und in der App `drawable-nodpi/logo_fa_ki.png` (`AppLogo` in Menü, Chatliste, Startbildschirm).
 
+## Geplant: NPU (Hexagon) – noch nicht gebaut, erst nach Go des Nutzers
+- Ziel: GGUF-Modelle zusätzlich auf der NPU des Fold 7 (Hexagon V79) über llama.cpp, Auswahl „NPU“ neben dem GPU-Anteil (Modelle-Seite).
+- Geprüft: llama.cpp **b12287 reicht** (enthält `ggml-hexagon`, `htp/gated-delta-net-ops.c` mit HMX-chunked für Qwen3.5/DeltaNet, `docs/backend/snapdragon/CMakeUserPresets.json`). Keine Versionsänderung nötig.
+- Bau: GitHub Actions im Docker-Image `ghcr.io/snapdragon-toolchain/arm64-android:v0.8` (NDK + Hexagon SDK), `GGML_HEXAGON=ON` zusätzlich zu OpenCL, `GGML_BACKEND_DL`; `libggml-hexagon.so` + `libggml-htp-v79.so` (ggf. v73/v75/v81) in die APK. **Keine** QAIRT/QNN-Bibliotheken nötig, kein adb, kein llama-server.
+- App: `<uses-native-library libcdsprpc.so>` im Manifest, `ADSP_LIBRARY_PATH` auf `nativeLibraryDir` setzen, Gerät `HTP0` wählen (NPU zählt wie GPU bei `-ngl`). Fehlerbericht: ob „Hexagon Arch version v79“ startet und welche Ops abgelehnt werden.
+- Risiken: Backend „experimental“; ob Samsung einer normalen App FastRPC/NPU erlaubt, zeigt erst der Test. NPU braucht `Q4_0` (nicht Q4_K_M). Testmodell: `fraQtl/Qwen3.5-4B-NPU-GGUF` (Q4_0) oder normales Q4_0 von Qwen3.5-4B.
+- Offen außerdem: Qwen-`.litertlm` ohne „gpu“ im Namen stürzt auf der GPU ab (Speicher) – Vorschlag: vorher sperren mit Hinweis auf GGUF/gpu-Variante (noch nicht gebaut).
+
 ## Entwürfe 1:1 (höchste Priorität)
 - Die freigegebenen Entwürfe liegen in `design/` (`1-chat.png` … `18-aufgeklappt.png`, Quelle `design/entwuerfe.html` mit allen Farben/Größen/Abständen). **Jeder Bildschirm wird 1:1 wie im Entwurf gebaut** – gleiche Anordnung, Texte, Farben (CSS-Variablen = `FK`), Schriftgrößen, Radien, Abstände, Symbole. Nichts weglassen, nichts dazuerfinden. Langsam und präzise arbeiten; vor dem Bauen jeden Bildschirm mit dem Bild vergleichen. Abweichungen nur, wenn der Nutzer es sagt.
 
