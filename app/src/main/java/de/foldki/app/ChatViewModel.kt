@@ -692,11 +692,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     if (!_ui.value.nanoReady) throw IllegalStateException("Gemini Nano ist nicht bereit: ${_ui.value.nanoStatus}")
                     nano.reply(system, history, web).collect { onPiece(it) }
                 } else withLocal {
-                    val webText = if (web) webFor(prompt) else ""
+                    // Everything must fit into the model's context – too much input closes the whole app natively.
+                    val budget = llm.inputBudgetChars - system.length
+                    val webText = if (web) webFor(prompt).take(budget / 4) else ""
                     val turns = history.filter { !it.isError && it.text.isNotBlank() }
                     val last = turns.lastOrNull { it.role == Role.USER } ?: return@withLocal
-                    val earlier = turns.subList(0, turns.lastIndexOf(last)).map { turnOf(it) }
-                    val question = (if (webText.isBlank()) "" else "Internetsuche:\n${webText.take(6000)}\n\n") + turnOf(last).text
+                    val earlier = turns.subList(0, turns.lastIndexOf(last)).map { turnOf(it, budget / 3) }
+                    val room = (budget * 0.8).toInt() - webText.length - last.text.length
+                    val own = turnOf(last, room.coerceAtLeast(0))
+                    if (last.attachments.any { it.text.length > room.coerceAtLeast(0) })
+                        notify("Die Datei ist zu lang für dieses Modell – es liest nur den Anfang (ca. ${room.coerceAtLeast(0)} Zeichen).")
+                    val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + own.text
                     llm.chat(conv.id, system, earlier, question, last.id, botMsg.id).collect { onPiece(it) }
                 }
                 val end = ThinkParser.split(raw.toString(), thinkOpen, finished = true)
@@ -743,10 +749,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** One chat turn for the local model: a question with the text of its attached files, or an earlier answer. */
-    private fun turnOf(m: ChatMessage): LocalEngine.Turn {
+    private fun turnOf(m: ChatMessage, fileChars: Int): LocalEngine.Turn {
         if (m.role != Role.USER) return LocalEngine.Turn(m.id, false, DocumentParser.display(m.text).take(2000))
         val files = StringBuilder()
-        var budget = 8000
+        var budget = fileChars
         m.attachments.forEach { a ->
             if (budget <= 0) return@forEach
             if (a.text.isBlank()) { files.append("(Aus ").append(a.name).append(" konnte kein Text gelesen werden.)\n\n"); return@forEach }

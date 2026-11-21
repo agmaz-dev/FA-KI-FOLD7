@@ -49,6 +49,17 @@ class LocalEngine(context: Context) {
     private var keptSystem = ""
     private var keptIds: List<String> = emptyList()
     private var keptTurns = 0
+    private var keptChars = 0
+
+    /** Context (tokens) of the loaded model: from "ekv1280"/"ekv4096" in the file name, at most [MAX_TOKENS]. */
+    @Volatile var contextTokens: Int = MAX_TOKENS
+        private set
+
+    /**
+     * Characters of input (instruction + chat + question) that safely fit next to an answer. Too much input
+     * makes LiteRT-LM abort natively (the whole app closes), so every input is cut to this size first.
+     */
+    val inputBudgetChars: Int get() = ((contextTokens - maxOf(512, contextTokens * 3 / 10)) * CHARS_PER_TOKEN).toInt().coerceAtLeast(800)
 
     val isLoaded: Boolean get() = engine != null
 
@@ -59,6 +70,7 @@ class LocalEngine(context: Context) {
             mutex.withLock {
                 if (engine != null && loadedPath == modelPath) return@withLock backendUsed ?: "CPU"
                 closeNow()
+                val ctx = contextFor(modelPath)
                 var lastError: Throwable? = null
                 val order = if (preferGpu) listOf("GPU", "CPU") else listOf("CPU")
                 for (b in order) {
@@ -68,14 +80,14 @@ class LocalEngine(context: Context) {
                             EngineConfig(
                                 modelPath = modelPath,
                                 backend = if (b == "GPU") Backend.GPU() else Backend.CPU(),
-                                maxNumTokens = MAX_TOKENS,
+                                maxNumTokens = ctx,
                                 cacheDir = app.cacheDir.path,
                             )
                         )
                     } catch (t: Throwable) { lastError = t; continue }
                     try {
                         e.initialize()
-                        engine = e; backendUsed = b; loadedPath = modelPath
+                        engine = e; backendUsed = b; loadedPath = modelPath; contextTokens = ctx
                         return@withLock b
                     } catch (t: Throwable) { // incl. UnsatisfiedLinkError / missing OpenCL
                         lastError = t
@@ -94,8 +106,12 @@ class LocalEngine(context: Context) {
     fun chat(key: String, system: String, earlier: List<Turn>, question: String, questionId: String, answerId: String): Flow<String> = flow {
         val e = engine ?: throw IllegalStateException("Modell ist nicht geladen.")
         val ids = earlier.map { it.id }
-        val reuse = kept != null && keptKey == key && keptSystem == system && keptIds == ids && keptTurns < MAX_KEPT_TURNS
-        var conv = if (reuse) kept!! else open(e, system, earlier).also { kept = it; keptKey = key; keptSystem = system; keptTurns = 0 }
+        val budget = inputBudgetChars
+        // Reuse the open conversation only while everything still fits into the model's context.
+        val reuse = kept != null && keptKey == key && keptSystem == system && keptIds == ids && keptTurns < MAX_KEPT_TURNS &&
+            system.length + keptChars + question.length <= budget
+        var conv = if (reuse) kept!! else open(e, system, earlier, budget - system.length - question.length)
+            .also { kept = it; keptKey = key; keptSystem = system; keptTurns = 0 }
         keptIds = emptyList() // only valid again after a complete answer
         val sb = StringBuilder()
         var done = false
@@ -106,20 +122,30 @@ class LocalEngine(context: Context) {
                 if (t is kotlinx.coroutines.CancellationException || !reuse || sb.isNotEmpty()) throw t
                 // The open conversation is full or broken: start it fresh once.
                 dropKept()
-                conv = open(e, system, earlier).also { kept = it; keptKey = key; keptSystem = system; keptTurns = 0 }
+                conv = open(e, system, earlier, budget - system.length - question.length).also { kept = it; keptKey = key; keptSystem = system; keptTurns = 0 }
                 conv.sendMessageAsync(question).collect { m -> val x = text(m); if (x.isNotEmpty()) { sb.append(x); emit(x) } }
             }
             done = true
             keptIds = ids + questionId + answerId
             keptTurns += 2
+            keptChars += question.length + sb.length
         } finally {
             if (!done) { runCatching { conv.cancelProcess() }; dropKept() }
         }
     }.flowOn(Dispatchers.Default)
 
-    private fun open(e: Engine, system: String, earlier: List<Turn>): Conversation {
+    /** New conversation with the newest earlier turns that fit into [room] characters. */
+    private fun open(e: Engine, system: String, earlier: List<Turn>, room: Int): Conversation {
         dropKept()
-        val initial = earlier.takeLast(10).dropWhile { !it.user }.map { if (it.user) Message.user(it.text) else Message.model(it.text) }
+        val picked = ArrayList<Turn>()
+        var used = 0
+        for (t in earlier.takeLast(10).asReversed()) {
+            if (used + t.text.length > room) break
+            used += t.text.length; picked.add(0, t)
+        }
+        val fit = picked.dropWhile { !it.user }
+        keptChars = fit.sumOf { it.text.length }
+        val initial = fit.map { if (it.user) Message.user(it.text) else Message.model(it.text) }
         return if (system.isBlank()) e.createConversation(ConversationConfig(initialMessages = initial))
         else e.createConversation(ConversationConfig(systemInstruction = Contents.of(system), initialMessages = initial))
     }
@@ -178,7 +204,7 @@ class LocalEngine(context: Context) {
 
     private fun dropKept() {
         val c = kept
-        kept = null; keptIds = emptyList(); keptKey = ""; keptSystem = ""; keptTurns = 0
+        kept = null; keptIds = emptyList(); keptKey = ""; keptSystem = ""; keptTurns = 0; keptChars = 0
         runCatching { c?.close() }
     }
 
@@ -200,5 +226,13 @@ class LocalEngine(context: Context) {
         const val MAX_TOKENS = 4096
         /** After this many turns in one open conversation it starts fresh with the last turns (context stays small). */
         const val MAX_KEPT_TURNS = 16
+        /** Conservative: German text is about 2.5–4 characters per token. */
+        const val CHARS_PER_TOKEN = 2.2
+
+        /** "…_ekv1280…" → 1280 (at most [MAX_TOKENS]); without that hint [MAX_TOKENS]. */
+        fun contextFor(path: String): Int {
+            val n = Regex("ekv(\\d{3,6})", RegexOption.IGNORE_CASE).find(path.substringAfterLast('/'))?.groupValues?.get(1)?.toIntOrNull()
+            return (n ?: MAX_TOKENS).coerceIn(512, MAX_TOKENS)
+        }
     }
 }
