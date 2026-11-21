@@ -271,7 +271,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             (if (settings.gemmaBackend == "GPU" && !HfModels.isGpuFile(file) && !file.lowercase().startsWith("gemma")) " Tipp: Diese Datei ist nicht für den Grafikprozessor gebaut. " +
                 "Lade unter Erkunden die Variante mit „gpu“ im Dateinamen." else "")
         voice.trimMemory() // speech model out of memory before a big load
-        de.foldki.app.data.DebugLog.write("LADE $file · ${settings.gemmaBackend} · ${if (HfModels.isGpuFile(file)) "GPU-Datei" else "keine GPU-Datei"} · " +
+        de.foldki.app.data.DebugLog.write("LADE $file · ${settings.gemmaBackend} · ${if (HfModels.isGpuFile(file)) "GPU-Datei" else "keine GPU-Datei (GPU ohne Cache)"} · " +
             "${LocalModelManager.gb(f.length())} · frei RAM ${freeRamMb()} MB")
         val t0 = System.currentTimeMillis()
         val d = llm.loadAsync(f.absolutePath, settings.gemmaBackend == "GPU")

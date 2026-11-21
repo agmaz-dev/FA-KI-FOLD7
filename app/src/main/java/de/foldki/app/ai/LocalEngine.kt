@@ -83,7 +83,7 @@ class LocalEngine(context: Context) {
                                 backend = if (a.backend == "GPU") Backend.GPU() else Backend.CPU(),
                                 visionBackend = if (a.vision) Backend.GPU() else null,
                                 maxNumTokens = a.ctx,
-                                cacheDir = app.cacheDir.path,
+                                cacheDir = cacheFor(modelPath, a.backend),
                             )
                         )
                     } catch (t: Throwable) { lastError = t; continue }
@@ -226,6 +226,15 @@ class LocalEngine(context: Context) {
         closeNow()
     }
 
+    /**
+     * Files not built for the GPU (e.g. "Qwen3.5-2B_int8") run on the GPU only without the weight cache: writing the
+     * cache converts all weights at once and needed ~8 GB on the Fold 7 (Android killed the app). The model card runs
+     * them with "--backend gpu --cache no". GPU builds and the CPU keep the cache (faster second start).
+     */
+    private fun cacheFor(modelPath: String, backend: String): String =
+        if (backend == "GPU" && !HfModels.isGpuFile(modelPath) && !modelPath.substringAfterLast('/').lowercase().startsWith("gemma")) NO_CACHE
+        else app.cacheDir.path
+
     /** One way to start the engine. */
     data class Attempt(val backend: String, val ctx: Int, val vision: Boolean = false)
 
@@ -245,6 +254,8 @@ class LocalEngine(context: Context) {
 
         /** Context of the engine (prompt + answer). Most .litertlm files are built for 4096. */
         const val MAX_TOKENS = 4096
+        /** LiteRT-LM sentinel: no weight/program cache. */
+        const val NO_CACHE = ":nocache"
         /** After this many turns in one open conversation it starts fresh with the last turns (context stays small). */
         const val MAX_KEPT_TURNS = 16
         /** Conservative: German text is about 2.5–4 characters per token. */
