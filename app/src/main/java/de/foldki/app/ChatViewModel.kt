@@ -251,6 +251,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         idleJob = viewModelScope.launch { delay(5 * 60_000L); if (!llmGenerating) { llm.close(); _ui.update { it.copy(backend = "") } } }
     }
 
+    private fun freeRamMb(): Long = runCatching {
+        val am = getApplication<Application>().getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.availMem / 1_000_000
+    }.getOrDefault(-1L)
+
     private fun noModelText(): String =
         "Es ist kein Modell gewählt. Bitte unter Einstellungen → KI-Modelle ein Modell herunterladen oder auswählen."
 
@@ -263,6 +268,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (llm.loadedPath == f.absolutePath) return null
         if (settings.llmCrashed == file) return "${models.nameOf(file)} hat die App beim letzten Mal beendet. " +
             "Wähle es unter Einstellungen → KI-Modelle erneut aus, um es nochmal zu versuchen."
+        de.foldki.app.data.DebugLog.write("LADE $file · ${settings.gemmaBackend} · ${LocalModelManager.gb(f.length())} · frei RAM ${freeRamMb()} MB")
         val d = llm.loadAsync(f.absolutePath, settings.gemmaBackend == "GPU")
         llmBegin(); d.invokeOnCompletion { llmEnd() } // stays guarded until the native load really ends
         return try {
@@ -703,6 +709,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     if (last.attachments.any { it.text.length > room.coerceAtLeast(0) })
                         notify("Die Datei ist zu lang für dieses Modell – es liest nur den Anfang (ca. ${room.coerceAtLeast(0)} Zeichen).")
                     val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + own.text
+                    // For the error report: what goes to the model (a native crash is only seen at the next start).
+                    de.foldki.app.data.DebugLog.write(
+                        "START ${models.nameOf(act)} · ${llm.backendUsed} · Kontext ${llm.contextTokens} Tokens · " +
+                            "Platz ${llm.inputBudgetChars} Zeichen · Anweisung ${system.length} · Frage ${question.length} · " +
+                            "Verlauf ${earlier.size} Nachrichten (${earlier.sumOf { it.text.length }} Zeichen)",
+                    )
                     llm.chat(conv.id, system, earlier, question, last.id, botMsg.id).collect { onPiece(it) }
                 }
                 val end = ThinkParser.split(raw.toString(), thinkOpen, finished = true)

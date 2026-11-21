@@ -27,6 +27,38 @@ object DebugLog {
             runCatching { write("ABSTURZ in ${t.name}: ${e.stackTraceToString().take(4000)}") }
             previous?.uncaughtException(t, e)
         }
+        runCatching { logExitReasons(context) }
+    }
+
+    /**
+     * Why the app was closed last time (Android 11+): native crash (e.g. LiteRT-LM aborted), out of memory,
+     * killed by the system, ANR … Native crashes cannot be caught while they happen, so they are read at the next start.
+     */
+    private fun logExitReasons(context: Context) {
+        if (android.os.Build.VERSION.SDK_INT < 30) return
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val prefs = context.getSharedPreferences("debug_log", Context.MODE_PRIVATE)
+        val seen = prefs.getLong("last_exit", 0L)
+        val infos = am.getHistoricalProcessExitReasons(context.packageName, 0, 5).filter { it.timestamp > seen }
+        for (i in infos.sortedBy { it.timestamp }) {
+            val why = when (i.reason) {
+                android.app.ApplicationExitInfo.REASON_CRASH_NATIVE -> "NATIVER ABSTURZ (z. B. KI-Modell/LiteRT-LM)"
+                android.app.ApplicationExitInfo.REASON_CRASH -> "Absturz (Java/Kotlin)"
+                android.app.ApplicationExitInfo.REASON_LOW_MEMORY -> "vom System beendet: zu wenig Arbeitsspeicher"
+                android.app.ApplicationExitInfo.REASON_ANR -> "App reagierte nicht (ANR)"
+                android.app.ApplicationExitInfo.REASON_SIGNALED -> "vom System beendet (Signal ${i.status})"
+                android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "vom System beendet: zu viel Rechenlast"
+                android.app.ApplicationExitInfo.REASON_USER_REQUESTED, android.app.ApplicationExitInfo.REASON_USER_STOPPED -> null
+                android.app.ApplicationExitInfo.REASON_EXIT_SELF -> null
+                else -> "beendet (Grund ${i.reason})"
+            } ?: continue
+            write(
+                "LETZTES ENDE (${time.format(Date(i.timestamp))}): $why" +
+                    (i.description?.let { " · $it" } ?: "") +
+                    " · Speicher: ${i.pss / 1024} MB (PSS), ${i.rss / 1024} MB (RSS)",
+            )
+        }
+        infos.maxOfOrNull { it.timestamp }?.let { prefs.edit().putLong("last_exit", it).apply() }
     }
 
     @Synchronized
