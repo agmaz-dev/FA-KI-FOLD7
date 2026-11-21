@@ -21,7 +21,7 @@
 - Immer das dunkle Fold-KI-Design: Farben/Bausteine in `ui/Theme.kt` (`FK`) und `ui/Design.kt` (Tile, Group, SettingRow, Tag, FkToggle, FkChip, FkButton), Schrift Inter (`res/font`). Neue Bildschirme nur mit diesen Bausteinen bauen, damit alles gleich aussieht.
 
 ## Allgemein
-- Antworten und App-Texte auf Deutsch.
+- Antworten und App-Texte auf Deutsch. **Antworten an den Nutzer immer kurz** (Kurzfassung, wenige Sätze, kein Aufsatz).
 - **Datenschutz: Niemals echte persönliche Daten des Nutzers in Code, Tests, Kommentare, Commit-Nachrichten oder Doku** (Name, Adresse, Telefon, E-Mail, Aktenzeichen, Briefinhalte aus Fehlerberichten). Für Tests nur Musterdaten (z. B. „Paula Fischer, Lindenallee 18, 14612 Falkensee“). Der Verlauf wurde am 21.11.2026 bereinigt.
 
 ## On-Device-Funktionen (ab 2.0)
