@@ -414,14 +414,13 @@ private fun MenuSearch(value: String, onChange: (String) -> Unit, modifier: Modi
     }
 }
 
-/** App logo: blue gradient tile with the white spark. */
+/** App logo: FA-KI-Logo (aus FA KI Desktop, src/logo.svg). */
 @Composable
 private fun AppLogo(size: Dp) {
-    Box(
-        Modifier.size(size).clip(RoundedCornerShape(9.dp))
-            .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(FK.T7.first, FK.Accent))),
-        contentAlignment = Alignment.Center,
-    ) { Spark(size * 0.5f, androidx.compose.ui.graphics.Color.White) }
+    androidx.compose.foundation.Image(
+        androidx.compose.ui.res.painterResource(de.foldki.app.R.drawable.logo_fa_ki), "Fold KI",
+        Modifier.size(size),
+    )
 }
 
 @Composable
@@ -648,13 +647,8 @@ private fun StartScreen(ui: UiState, vm: ChatViewModel, onSettings: () -> Unit, 
         ) {
             Box(
                 Modifier.padding(bottom = 26.dp).size(92.dp)
-                    .shadow(30.dp, RoundedCornerShape(28.dp), ambientColor = FK.Accent, spotColor = FK.Accent)
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(androidx.compose.ui.graphics.Brush.linearGradient(
-                        0f to FK.T7.first, 0.55f to FK.Accent, 1f to androidx.compose.ui.graphics.Color(0xFF64D2FF),
-                    )),
-                contentAlignment = Alignment.Center,
-            ) { Spark(46.dp, androidx.compose.ui.graphics.Color.White) }
+                    .shadow(30.dp, RoundedCornerShape(24.dp), ambientColor = androidx.compose.ui.graphics.Color(0xFF6C5CFF), spotColor = androidx.compose.ui.graphics.Color(0xFF6C5CFF)),
+            ) { AppLogo(92.dp) }
             Text("Wie kann ich helfen?", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = FK.Text, letterSpacing = (-0.4).sp, textAlign = TextAlign.Center, lineHeight = 32.sp)
             Text(
                 if (ui.incognito) "Inkognito – dieser Chat wird nicht gespeichert." else "Alles bleibt auf deinem Fold.",
