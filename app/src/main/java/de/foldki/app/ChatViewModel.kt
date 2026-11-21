@@ -259,7 +259,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private fun noModelText(): String =
         "Es ist kein Modell gewählt. Bitte unter Einstellungen → KI-Modelle ein Modell herunterladen oder auswählen."
 
-    /** Loads the chosen local model if needed (max. 3 min). null = ready, else the reason (German). */
+    /** Loads the chosen local model if needed (max. 10 min; the first GPU start compiles and can take long). null = ready, else the reason (German). */
     private suspend fun ensureLoaded(): String? {
         val file = settings.activeModel
         if (file.isBlank() || file == Settings.NANO) return noModelText()
@@ -277,7 +277,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val d = llm.loadAsync(f.absolutePath, settings.gemmaBackend == "GPU")
         llmBegin(); d.invokeOnCompletion { llmEnd() } // stays guarded until the native load really ends
         return try {
-            val b = withTimeoutOrNull(180_000) { d.await() } ?: return "Das Modell lädt zu lange (über 3 Minuten). Bitte nochmal fragen."
+            val b = withTimeoutOrNull(600_000) { d.await() } ?: return "Das Modell lädt zu lange (über 10 Minuten). Bitte nochmal fragen."
             de.foldki.app.data.DebugLog.write("Modell geladen: $file · $b · ${(System.currentTimeMillis() - t0) / 1000} s · frei RAM danach ${freeRamMb()} MB")
             _ui.update { it.copy(backend = b) }
             null

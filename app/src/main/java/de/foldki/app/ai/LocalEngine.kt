@@ -72,25 +72,30 @@ class LocalEngine(context: Context) {
                 closeNow()
                 val ctx = contextFor(modelPath)
                 var lastError: Throwable? = null
-                val order = if (preferGpu) listOf("GPU", "CPU") else listOf("CPU")
-                for (b in order) {
-                    onAttempt(b)
+                // GPU builds ("gpu" in the name) only run on the GPU – never silently on the CPU.
+                val gpuOnly = preferGpu && HfModels.isGpuFile(modelPath)
+                for (a in attempts(ctx, preferGpu, gpuOnly)) {
+                    onAttempt(a.backend)
                     val e = try {
                         Engine(
                             EngineConfig(
                                 modelPath = modelPath,
-                                backend = if (b == "GPU") Backend.GPU() else Backend.CPU(),
-                                maxNumTokens = ctx,
+                                backend = if (a.backend == "GPU") Backend.GPU() else Backend.CPU(),
+                                visionBackend = if (a.vision) Backend.GPU() else null,
+                                maxNumTokens = a.ctx,
                                 cacheDir = app.cacheDir.path,
                             )
                         )
                     } catch (t: Throwable) { lastError = t; continue }
                     try {
                         e.initialize()
-                        engine = e; backendUsed = b; loadedPath = modelPath; contextTokens = ctx
-                        return@withLock b
+                        engine = e; backendUsed = a.backend; loadedPath = modelPath; contextTokens = a.ctx
+                        if (a != attempts(ctx, preferGpu, gpuOnly).first())
+                            de.foldki.app.data.DebugLog.write("Geladen mit Ersatz-Einstellung: ${a.backend} · Kontext ${a.ctx}" + if (a.vision) " · Bildteil GPU" else "")
+                        return@withLock a.backend
                     } catch (t: Throwable) { // incl. UnsatisfiedLinkError / missing OpenCL
                         lastError = t
+                        de.foldki.app.data.DebugLog.write("Versuch ${a.backend} · Kontext ${a.ctx}${if (a.vision) " · Bildteil GPU" else ""} fehlgeschlagen: ${t.message?.take(300)}")
                         runCatching { e.close() }
                     }
                 }
@@ -221,7 +226,23 @@ class LocalEngine(context: Context) {
         closeNow()
     }
 
+    /** One way to start the engine. */
+    data class Attempt(val backend: String, val ctx: Int, val vision: Boolean = false)
+
     companion object {
+        /**
+         * Load attempts in order. On the GPU: as built, then with the image part on the GPU (some multimodal GPU
+         * builds need it), then with a smaller context (less GPU memory). The CPU only for files not built for the GPU.
+         */
+        fun attempts(ctx: Int, preferGpu: Boolean, gpuOnly: Boolean): List<Attempt> {
+            val gpu = if (!preferGpu) emptyList() else buildList {
+                add(Attempt("GPU", ctx))
+                add(Attempt("GPU", ctx, vision = true))
+                listOf(2048, 1024).filter { it < ctx }.forEach { add(Attempt("GPU", it)) }
+            }
+            return if (gpuOnly) gpu else gpu + Attempt("CPU", ctx)
+        }
+
         /** Context of the engine (prompt + answer). Most .litertlm files are built for 4096. */
         const val MAX_TOKENS = 4096
         /** After this many turns in one open conversation it starts fresh with the last turns (context stays small). */
