@@ -58,6 +58,17 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -113,7 +124,9 @@ fun ChatApp(vm: ChatViewModel) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     // Daily briefing: checked each time the app comes to the foreground (only 5–11 o'clock, once a day).
     androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { vm.onAppResumed(); onPauseOrDispose { } }
-    var showSettings by remember { mutableStateOf(false) }
+    // Open page of the menu: null = chat, "" = Einstellungen, else a page key (models, hf, voice, history, instructions, tools …).
+    var page by rememberSaveable { mutableStateOf<String?>(null) }
+    val showSettings = page != null
 
     // Divider position for the unfolded layout, restored from the last session (stored on the device only).
     val split = rememberSplitPaneState(
@@ -148,7 +161,8 @@ fun ChatApp(vm: ChatViewModel) {
     BoxWithConstraints(Modifier.fillMaxSize().background(FK.Bg)) {
         val wide = maxWidth >= 600.dp // Fold7 unfolded / tablets: two panes with a draggable divider
         if (wide) {
-            val openSettings = { split.expandFirst(); showSettings = true }
+            val openSettings = { split.expandFirst(); page = "" }
+            val openPage: (String) -> Unit = { p -> split.expandFirst(); page = p }
             val paneScope = rememberCoroutineScope()
             val sidebarClosed by remember { derivedStateOf { split.collapse == PaneCollapse.FIRST } }
             SplitPane(
@@ -157,13 +171,13 @@ fun ChatApp(vm: ChatViewModel) {
                 onSettled = { f, c -> vm.settings.splitFraction = f; vm.settings.splitCollapse = c.name },
                 first = {
                     Surface(color = FK.Side, modifier = Modifier.fillMaxSize()) {
-                        if (showSettings) SettingsScreen(vm, ui, onBack = { showSettings = false })
-                        else Sidebar(ui, vm, onSettings = openSettings, onPicked = {}, onCollapse = { split.toggleFirst(paneScope) })
+                        if (showSettings) SettingsScreen(vm, ui, startPage = page!!.ifEmpty { null }, onBack = { page = null })
+                        else Sidebar(ui, vm, onPage = openPage, onPicked = {}, onCollapse = { split.toggleFirst(paneScope) })
                     }
                 },
                 second = {
                     preview?.let { previewPane(it) } ?: ChatScreen(
-                        ui, vm, showMenu = false, onMenu = {}, onSettings = openSettings,
+                        ui, vm, showMenu = false, onMenu = {}, onSettings = { openPage("models") }, onInstructions = { openPage("instructions") },
                         sidebar = SidebarToggle(open = !sidebarClosed, toggle = { split.toggleFirst(paneScope) }),
                     )
                 },
@@ -175,11 +189,11 @@ fun ChatApp(vm: ChatViewModel) {
                 drawerState = drawer,
                 drawerContent = {
                     ModalDrawerSheet(drawerContainerColor = FK.Side, modifier = Modifier.widthIn(max = 320.dp)) {
-                        Sidebar(ui, vm, onSettings = { showSettings = true }, onPicked = { scope.launch { drawer.close() } }, onCollapse = null)
+                        Sidebar(ui, vm, onPage = { page = it }, onPicked = { scope.launch { drawer.close() } }, onCollapse = null)
                     }
                 },
             ) {
-                ChatScreen(ui, vm, showMenu = true, onMenu = { scope.launch { drawer.open() } }, onSettings = { showSettings = true })
+                ChatScreen(ui, vm, showMenu = true, onMenu = { scope.launch { drawer.open() } }, onSettings = { page = "models" }, onInstructions = { page = "instructions" })
             }
         }
 
@@ -189,7 +203,7 @@ fun ChatApp(vm: ChatViewModel) {
             enter = slideInHorizontally { it } + fadeIn(),
             exit = slideOutHorizontally { it } + fadeOut(),
         ) {
-            SettingsScreen(vm, ui, onBack = { showSettings = false })
+            SettingsScreen(vm, ui, startPage = page?.ifEmpty { null }, onBack = { page = null })
         }
 
         // Folded: the PDF preview is a full-screen page on top.
@@ -234,95 +248,116 @@ private fun dayGroup(t: Long): String {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Sidebar(ui: UiState, vm: ChatViewModel, onSettings: () -> Unit, onPicked: () -> Unit, onCollapse: (() -> Unit)?) {
+private fun Sidebar(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, onPicked: () -> Unit, onCollapse: (() -> Unit)?) {
     var query by rememberSaveable { mutableStateOf("") }
     var confirmDelete by remember { mutableStateOf<Conversation?>(null) }
-    val profiles by vm.profiles.collectAsStateWithLifecycle()
-    val active = profiles.first.firstOrNull { it.id == profiles.second }
     val shown = remember(ui.conversations, query) {
         val q = query.trim().lowercase()
         ui.conversations.filter { c -> q.isEmpty() || c.title.lowercase().contains(q) || c.messages.any { it.text.lowercase().contains(q) } }
     }
-    Column(Modifier.fillMaxHeight().background(FK.Side).statusBarsPadding().navigationBarsPadding().padding(horizontal = 12.dp)) {
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 6.dp, bottom = 10.dp).heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Fold KI", fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, modifier = Modifier.weight(1f))
-            if (onCollapse != null) IconButton(onClick = onCollapse) {
-                Icon(Icons.AutoMirrored.Filled.MenuOpen, "Seitenleiste schließen", tint = FK.Text)
+    val go: (String) -> Unit = { onPage(it); onPicked() }
+    Column(Modifier.fillMaxHeight().background(FK.Side).statusBarsPadding().navigationBarsPadding()) {
+        LazyColumn(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+            item {
+                Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp, bottom = 12.dp).heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(34.dp).clip(RoundedCornerShape(9.dp))
+                            .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(FK.T7.first, FK.Accent))),
+                        contentAlignment = Alignment.Center,
+                    ) { Spark(18.dp, androidx.compose.ui.graphics.Color.White) }
+                    Spacer(Modifier.width(10.dp))
+                    Text("Fold KI", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f))
+                    if (onCollapse != null) IconButton(onClick = onCollapse) {
+                        Icon(Icons.AutoMirrored.Filled.MenuOpen, "Seitenleiste schließen", tint = FK.Text)
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth().height(46.dp).clip(RoundedCornerShape(12.dp)).background(androidx.compose.ui.graphics.Color.White)
+                        .clickable { vm.newChat(); onPicked() },
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center,
+                ) {
+                    Icon(Icons.Default.Add, null, tint = androidx.compose.ui.graphics.Color.Black, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Neuer Chat", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                }
+                Row(
+                    Modifier.padding(top = 10.dp, bottom = 4.dp).fillMaxWidth().height(40.dp).clip(RoundedCornerShape(10.dp)).background(FK.Surface2)
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.Search, null, tint = FK.Dim, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Box(Modifier.weight(1f)) {
+                        if (query.isEmpty()) Text("Chats durchsuchen", color = FK.Dim, fontSize = 15.sp)
+                        BasicTextField(
+                            query, { query = it }, singleLine = true,
+                            textStyle = TextStyle(fontFamily = Inter, fontSize = 15.sp, color = FK.Text),
+                            cursorBrush = SolidColor(FK.Accent), modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    if (query.isNotEmpty()) Icon(Icons.Default.Close, "Suche leeren", tint = FK.Dim, modifier = Modifier.size(18.dp).clickable { query = "" })
+                }
             }
-        }
-        Row(
-            Modifier.fillMaxWidth().height(46.dp).clip(RoundedCornerShape(23.dp)).background(FK.Accent)
-                .clickable { vm.newChat(); onPicked() },
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center,
-        ) {
-            Icon(Icons.Default.Edit, null, tint = FK.OnAccent, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Neuer Chat", color = FK.OnAccent, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
-        }
-        Row(
-            Modifier.padding(top = 6.dp, bottom = 10.dp).fillMaxWidth().height(42.dp).clip(RoundedCornerShape(21.dp)).background(FK.Surface)
-                .padding(horizontal = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(Icons.Default.Search, null, tint = FK.Dim, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Box(Modifier.weight(1f)) {
-                if (query.isEmpty()) Text("Chats durchsuchen", color = FK.Dim, fontSize = 14.sp)
-                BasicTextField(
-                    query, { query = it }, singleLine = true,
-                    textStyle = TextStyle(fontFamily = Inter, fontSize = 14.sp, color = FK.Text),
-                    cursorBrush = SolidColor(FK.Accent), modifier = Modifier.fillMaxWidth(),
-                )
+            if (query.isBlank()) item {
+                MenuHead("Chats")
+                MenuItem(Icons.Default.ChatBubbleOutline, FK.T2, "Verlauf") { go("history") }
+                MenuItem(Icons.Default.StarBorder, FK.T1, "Gemerkte Antworten", count = ui.saved.size) { go("saved") }
+                MenuItem(Icons.Default.Person, FK.T4, "Meine Anweisungen", count = ui.instructions.size) { go("instructions") }
+                MenuHead("KI")
+                MenuItem(Icons.Default.Memory, FK.T3, "Modelle", count = ui.localModels.size) { go("models") }
+                MenuItem(Icons.Default.Explore, FK.T7, "Erkunden") { go("hf") }
+                MenuItem(Icons.AutoMirrored.Filled.VolumeUp, FK.T5, "Stimmen") { go("voice") }
+                MenuItem(Icons.Default.Build, FK.T8, "Werkzeuge") { go("tools") }
+                MenuHead("App")
+                MenuItem(Icons.Default.Settings, FK.T6, "Einstellungen") { go("") }
             }
-            if (query.isNotEmpty()) Icon(Icons.Default.Close, "Suche leeren", tint = FK.Dim, modifier = Modifier.size(18.dp).clickable { query = "" })
-        }
-        LazyColumn(Modifier.weight(1f)) {
             var last = ""
-            shown.forEach { c ->
+            shown.take(if (query.isBlank()) 30 else 200).forEach { c ->
                 val g = dayGroup(c.updatedAt)
                 if (g != last) {
                     last = g
-                    item(key = "h_$g") {
-                        Text(
-                            g.uppercase(), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = FK.Dim, letterSpacing = 0.8.sp,
-                            modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 16.dp, bottom = 6.dp),
-                        )
-                    }
+                    item(key = "h_$g") { MenuHead(g) }
                 }
                 item(key = c.id) {
                     val selected = c.id == ui.currentId
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                            .background(if (selected) FK.Surface else FK.Side)
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                            .background(if (selected) FK.Surface2 else FK.Side)
                             .combinedClickable(
                                 onClick = { vm.open(c.id); onPicked() },
                                 onLongClick = { confirmDelete = c },
                                 onLongClickLabel = "Löschen",
                             )
-                            .padding(horizontal = 10.dp, vertical = 11.dp),
+                            .padding(horizontal = 10.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(kindIcon(kindOf(c)), null, tint = FK.Dim, modifier = Modifier.size(18.dp))
+                        Icon(kindIcon(kindOf(c)), null, tint = FK.Muted, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(10.dp))
-                        Text(c.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 14.sp, color = FK.Text)
+                        Text(c.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 15.sp, color = FK.Text)
                     }
                 }
             }
-            if (shown.isEmpty()) item {
-                Text(if (query.isBlank()) "Noch keine Chats" else "Nichts gefunden", color = FK.Dim, fontSize = 13.sp, modifier = Modifier.padding(10.dp))
+            if (shown.isEmpty() && query.isNotBlank()) item {
+                Text("Nichts gefunden", color = FK.Dim, fontSize = 14.sp, modifier = Modifier.padding(10.dp))
             }
         }
-        HorizontalDivider(color = FK.Line)
+        // Active model at the bottom (like the mock-up): tap = models page.
         Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { onSettings(); onPicked() }
-                .padding(start = 6.dp, end = 6.dp, top = 12.dp, bottom = 16.dp),
+            Modifier.padding(12.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(FK.Surface2)
+                .clickable { go("models") }.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Avatar(active?.effectiveInitials ?: "", 34.dp)
+            Tile(Icons.Default.Memory, FK.OkSoft to FK.Ok, size = 36.dp, radius = 9.dp)
             Spacer(Modifier.width(10.dp))
-            Text(active?.name?.ifBlank { active.title } ?: "Einstellungen", fontSize = 14.sp, color = FK.Text, modifier = Modifier.weight(1f),
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Icon(Icons.Default.Settings, "Einstellungen", tint = FK.Dim, modifier = Modifier.size(20.dp))
+            Column(Modifier.weight(1f)) {
+                Text(ui.activeName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StatusDot(ui.modelReady); Spacer(Modifier.width(5.dp))
+                    Text(when { ui.usesNano -> "AICore"; ui.backend.isNotBlank() -> ui.backend; ui.modelReady -> "bereit"; else -> "kein Modell" },
+                        fontSize = 12.sp, color = FK.Muted)
+                }
+            }
+            Text("⇅", color = FK.Muted, fontSize = 16.sp)
         }
     }
     confirmDelete?.let { c ->
@@ -331,9 +366,27 @@ private fun Sidebar(ui: UiState, vm: ChatViewModel, onSettings: () -> Unit, onPi
             containerColor = FK.Surface,
             title = { Text("Chat löschen?", color = FK.Text) },
             text = { Text("„${c.title}“ wird vom Handy gelöscht.", color = FK.Muted) },
-            confirmButton = { TextButton(onClick = { vm.delete(c.id); confirmDelete = null }) { Text("Löschen", color = FK.Accent) } },
-            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Abbrechen", color = FK.Muted) } },
+            confirmButton = { TextButton(onClick = { vm.delete(c.id); confirmDelete = null }) { Text("Löschen", color = FK.Danger) } },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Abbrechen", color = FK.Accent) } },
         )
+    }
+}
+
+@Composable
+private fun MenuHead(text: String) {
+    Text(text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = FK.Muted, modifier = Modifier.padding(start = 8.dp, top = 16.dp, bottom = 4.dp))
+}
+
+@Composable
+private fun MenuItem(icon: ImageVector, tone: Pair<androidx.compose.ui.graphics.Color, androidx.compose.ui.graphics.Color>, title: String, count: Int = 0, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(horizontal = 6.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Tile(icon, tone, size = 28.dp, radius = 7.dp, iconSize = 16.dp)
+        Spacer(Modifier.width(12.dp))
+        Text(title, fontSize = 16.sp, color = FK.Text, modifier = Modifier.weight(1f))
+        if (count > 0) Text("$count", fontSize = 15.sp, color = FK.Muted)
     }
 }
 
@@ -347,28 +400,105 @@ private fun modelName(ui: UiState): String = ui.activeName
 private fun modelReady(ui: UiState): Boolean = ui.modelReady
 
 @Composable
-private fun TopBar(ui: UiState, showMenu: Boolean, onMenu: () -> Unit, sidebar: SidebarToggle?, onModel: () -> Unit, onNew: () -> Unit) {
-    Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun TopBar(ui: UiState, showMenu: Boolean, onMenu: () -> Unit, sidebar: SidebarToggle?, onModel: () -> Unit, onNew: () -> Unit, onOptions: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
         val right = showMenu || (sidebar != null && !sidebar.open)
-        Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-            if (showMenu) IconButton(onClick = onMenu) { Icon(Icons.Default.Menu, "Menü", tint = FK.Text) }
-            else if (sidebar != null && !sidebar.open) IconButton(onClick = sidebar.toggle) { Icon(Icons.Default.Menu, "Seitenleiste öffnen", tint = FK.Text) }
+        Box(Modifier.width(88.dp), contentAlignment = Alignment.CenterStart) {
+            if (showMenu) CircleBtn(Icons.Default.Menu, "Menü", onMenu)
+            else if (sidebar != null && !sidebar.open) CircleBtn(Icons.Default.Menu, "Seitenleiste öffnen", sidebar.toggle)
         }
-        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            Row(
-                Modifier.clip(RoundedCornerShape(20.dp)).background(FK.Surface).clickable(onClick = onModel)
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                StatusDot(modelReady(ui))
-                Spacer(Modifier.width(8.dp))
-                Text(modelName(ui), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = FK.Text, maxLines = 1)
-                Spacer(Modifier.width(8.dp))
-                Text("▼", fontSize = 11.sp, color = FK.Muted)
+        Column(
+            Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable(onClick = onModel).padding(vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(modelName(ui), fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 200.dp))
+                Text(" ⌄", fontSize = 14.sp, color = FK.Muted)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (ui.incognito) Text("🕶 Inkognito", fontSize = 12.sp, color = FK.Muted)
+                else {
+                    StatusDot(modelReady(ui)); Spacer(Modifier.width(5.dp))
+                    Text(
+                        listOf(if (ui.usesNano) "AICore" else ui.backend.ifBlank { "GPU" }, if (ui.webSearch) "Web" else "offline").joinToString(" · "),
+                        fontSize = 12.sp, color = FK.Muted,
+                    )
+                }
             }
         }
-        Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-            if (right) IconButton(onClick = onNew) { Icon(Icons.Default.Edit, "Neuer Chat", tint = FK.Text) }
+        Row(Modifier.width(88.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+            if (right) CircleBtn(Icons.Default.Edit, "Neuer Chat", onNew)
+            CircleBtn(Icons.Default.MoreVert, "Chat-Einstellungen", onOptions)
+        }
+    }
+}
+
+@Composable
+private fun CircleBtn(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Box(Modifier.size(38.dp).clip(CircleShape).background(FK.Surface).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Icon(icon, label, tint = FK.Text, modifier = Modifier.size(20.dp))
+    }
+}
+
+/** Sheet "Dieser Chat": Inkognito, own instruction, web search, creativity, length, view. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChatOptionsSheet(ui: UiState, vm: ChatViewModel, onDismiss: () -> Unit, onInstructions: () -> Unit) {
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var pickInstruction by remember { mutableStateOf(false) }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss, sheetState = state, containerColor = FK.Bg, scrimColor = FK.Scrim,
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp), dragHandle = { Grab() },
+    ) {
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 24.dp).navigationBarsPadding()) {
+            Text("Dieser Chat", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.padding(start = 4.dp, bottom = 12.dp))
+            Group {
+                SettingRow("Inkognito", "wird nicht auf dem Handy gespeichert", leading = { Tile(Icons.Default.VisibilityOff, FK.T6) }) {
+                    FkToggle(ui.incognito, { vm.setIncognito(it) })
+                }
+                GroupDivider()
+                SettingRow("Anweisung", null, leading = { Tile(Icons.Default.Person, FK.T4) }, onClick = { pickInstruction = !pickInstruction }) {
+                    Text(ui.chatInstructionName, fontSize = 15.sp, color = FK.Muted); Chevron()
+                }
+                if (pickInstruction) {
+                    val opts = listOf("" to "Standard (Systemanweisung)") + ui.instructions.map { it.id to (it.emoji + " " + it.name) }
+                    opts.forEach { (id, name) ->
+                        GroupDivider()
+                        SettingRow(name, null, leading = { Spacer(Modifier.width(30.dp)) }, onClick = { vm.setChatInstruction(id); pickInstruction = false }) {
+                            if (ui.chatInstruction == id) Icon(Icons.Default.Check, "Gewählt", tint = FK.Accent, modifier = Modifier.size(20.dp))
+                        }
+                    }
+                    GroupDivider()
+                    SettingRow("Anweisungen bearbeiten …", null, leading = { Spacer(Modifier.width(30.dp)) }, onClick = { onDismiss(); onInstructions() })
+                }
+                GroupDivider()
+                SettingRow("Websuche", "sucht mit deiner Frage", leading = { Tile(Icons.Default.Language, FK.T7) }) {
+                    FkToggle(ui.webSearch, { vm.setWeb(it) })
+                }
+            }
+            SectionLabel("Antwort")
+            Group {
+                Column(Modifier.padding(14.dp)) {
+                    Text("Kreativität", fontSize = 16.sp, color = FK.Text)
+                    Spacer(Modifier.height(8.dp))
+                    val cs = de.foldki.app.data.Creativity.entries
+                    Segmented(cs.map { it.label }, cs.indexOf(ui.creativity)) { vm.setCreativity(cs[it]) }
+                    Spacer(Modifier.height(16.dp))
+                    Text("Länge", fontSize = 16.sp, color = FK.Text)
+                    Spacer(Modifier.height(8.dp))
+                    val ls = de.foldki.app.data.AnswerLength.entries
+                    Segmented(ls.map { it.label }, ls.indexOf(ui.answerLength)) { vm.setAnswerLength(ls[it]) }
+                    Spacer(Modifier.height(8.dp))
+                    Note("„Standard“ und „Frei“ = das Modell bekommt keine Vorgaben.")
+                }
+            }
+            SectionLabel("Ansicht")
+            Group {
+                SettingRow("Gedanken anzeigen", null, leading = { Tile(Icons.Default.Psychology, FK.T4) }) { FkToggle(ui.showThoughts, { vm.setShowThoughts(it) }) }
+                GroupDivider()
+                SettingRow("Statistik unter Antworten", "GPU · Tokens · Zeit", leading = { Tile(Icons.Default.Speed, FK.T8) }) { FkToggle(ui.showStats, { vm.setShowStats(it) }) }
+            }
         }
     }
 }
@@ -452,60 +582,60 @@ private fun StartScreen(ui: UiState, vm: ChatViewModel, onSettings: () -> Unit, 
     val first = profiles.first.firstOrNull { it.id == profiles.second }?.name?.trim()?.split(Regex("\\s+"))?.firstOrNull().orEmpty()
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val maxCard = maxHeight * 0.45f
-        val topGap = minOf(120.dp, maxHeight * 0.14f)
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            brief?.let { b ->
-                BriefCard(
-                    b, onClose = vm::closeBrief, onOpenChat = vm::openBriefAsChat, onToggle = vm::toggleOpenItem,
-                    modifier = Modifier.padding(vertical = 8.dp).widthIn(max = 680.dp).fillMaxWidth().heightIn(max = maxCard),
+        Column(Modifier.fillMaxSize()) {
+            Column(
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+            ) {
+                brief?.let { b ->
+                    BriefCard(
+                        b, onClose = vm::closeBrief, onOpenChat = vm::openBriefAsChat, onToggle = vm::toggleOpenItem,
+                        modifier = Modifier.padding(vertical = 8.dp).widthIn(max = 680.dp).fillMaxWidth().heightIn(max = maxCard),
+                    )
+                    Spacer(Modifier.height(16.dp))
+                }
+                Box(
+                    Modifier.size(84.dp).clip(RoundedCornerShape(26.dp))
+                        .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(FK.T7.first, FK.Accent, androidx.compose.ui.graphics.Color(0xFF64D2FF)))),
+                    contentAlignment = Alignment.Center,
+                ) { Spark(40.dp, androidx.compose.ui.graphics.Color.White) }
+                Spacer(Modifier.height(22.dp))
+                Text(
+                    if (first.isBlank()) "Wie kann ich helfen?" else "${greeting()}, $first",
+                    fontSize = 28.sp, fontWeight = FontWeight.Bold, color = FK.Text, letterSpacing = (-0.4).sp, textAlign = TextAlign.Center,
                 )
-            }
-            Spacer(Modifier.height(if (brief == null) topGap else 16.dp))
-            Spark(34.dp)
-            Spacer(Modifier.height(14.dp))
-            Text(
-                if (first.isBlank()) greeting() else "${greeting()}, $first",
-                fontSize = 28.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, letterSpacing = (-0.4).sp, textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                modelName(ui) + if (ui.activeModel.isBlank()) "" else " · offline auf deinem Fold",
-                fontSize = 14.sp, color = FK.Muted, textAlign = TextAlign.Center,
-            )
-            if (ui.usesNano && !ui.nanoReady) {
                 Spacer(Modifier.height(8.dp))
-                Note(ui.nanoStatus)
-                if (ui.nanoDownloadable) TextButton(onClick = { vm.downloadNano() }) { Text("Gemini Nano herunterladen", color = FK.Accent) }
-                else TextButton(onClick = { vm.checkNano() }) { Text("Erneut prüfen", color = FK.Accent) }
-            } else if (!ui.modelReady) {
-                TextButton(onClick = onSettings) { Text("Modell wählen oder herunterladen", color = FK.Accent) }
-            }
-            Spacer(Modifier.height(36.dp))
-            Column(Modifier.widthIn(max = 560.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    StartCard(Icons.Default.MailOutline, "Brief beantworten", "Schreiben anhängen", Modifier.weight(1f)) { onCard(P_REPLY, true) }
-                    StartCard(Icons.Default.Gavel, "Widerspruch", "sachlich & mit Frist", Modifier.weight(1f)) { onCard(P_OBJECT, true) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    StartCard(Icons.AutoMirrored.Filled.Notes, "Zusammenfassen", "PDF oder Foto", Modifier.weight(1f)) { onCard(P_SUMMARY, true) }
-                    StartCard(Icons.Default.Code, "GitHub", "Code & APKs bauen", Modifier.weight(1f)) { onCard(P_GITHUB, false) }
+                Text(
+                    if (ui.incognito) "Inkognito – dieser Chat wird nicht gespeichert." else "Alles bleibt auf deinem Fold.",
+                    fontSize = 15.sp, color = FK.Muted, textAlign = TextAlign.Center,
+                )
+                if (ui.usesNano && !ui.nanoReady) {
+                    Spacer(Modifier.height(8.dp))
+                    Note(ui.nanoStatus)
+                    if (ui.nanoDownloadable) TextButton(onClick = { vm.downloadNano() }) { Text("Gemini Nano herunterladen", color = FK.Accent) }
+                    else TextButton(onClick = { vm.checkNano() }) { Text("Erneut prüfen", color = FK.Accent) }
+                } else if (!ui.modelReady) {
+                    TextButton(onClick = onSettings) { Text("Modell wählen oder herunterladen", color = FK.Accent) }
                 }
             }
-            Spacer(Modifier.height(16.dp))
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                StartChip("📄 Brief beantworten", "PDF oder Foto anhängen") { onCard(P_REPLY, true) }
+                StartChip("⚖️ Widerspruch", "sachlich und mit Frist") { onCard(P_OBJECT, true) }
+                StartChip("📝 Zusammenfassen", "Dokument erklären") { onCard(P_SUMMARY, true) }
+                StartChip("💻 GitHub", "Code und APKs") { onCard(P_GITHUB, false) }
+            }
         }
     }
 }
 
 @Composable
-private fun StartCard(icon: ImageVector, title: String, sub: String, modifier: Modifier, onClick: () -> Unit) {
-    val shape = RoundedCornerShape(16.dp)
-    Column(
-        modifier.clip(shape).background(FK.Surface).border(1.dp, FK.Line, shape).clickable(onClick = onClick).padding(14.dp),
-    ) {
-        Tile(icon, FK.AccentSoft to FK.Accent, size = 30.dp, radius = 9.dp, iconSize = 16.dp)
-        Spacer(Modifier.height(8.dp))
-        Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(sub, fontSize = 12.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+private fun StartChip(title: String, sub: String, onClick: () -> Unit) {
+    Column(Modifier.widthIn(min = 160.dp).clip(RoundedCornerShape(16.dp)).background(FK.Surface).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 11.dp)) {
+        Text(title, fontSize = 14.sp, color = FK.Text, maxLines = 1)
+        Text(sub, fontSize = 12.sp, color = FK.Muted, maxLines = 1)
     }
 }
 
@@ -514,7 +644,7 @@ private fun StartCard(icon: ImageVector, title: String, sub: String, modifier: M
 @Composable
 private fun ChatScreen(
     ui: UiState, vm: ChatViewModel, showMenu: Boolean, onMenu: () -> Unit, onSettings: () -> Unit,
-    sidebar: SidebarToggle? = null,
+    sidebar: SidebarToggle? = null, onInstructions: () -> Unit = onSettings,
 ) {
     val context = LocalContext.current
     val messages = ui.current?.messages.orEmpty()
@@ -605,6 +735,7 @@ private fun ChatScreen(
             }.onFailure { vm.notify("Teilen fehlgeschlagen.") }
         },
         hasSignature = hasSignature,
+        save = { m -> vm.saveAnswer(m) },
     )
 
     if (voiceMode) {
@@ -615,9 +746,10 @@ private fun ChatScreen(
     var text by rememberSaveable { mutableStateOf("") }
     var modelOpen by remember { mutableStateOf(false) }
     var attachOpen by remember { mutableStateOf(false) }
+    var optionsOpen by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().background(FK.Bg).statusBarsPadding().navigationBarsPadding().imePadding()) {
-        TopBar(ui, showMenu, onMenu, sidebar, onModel = { modelOpen = true }, onNew = { vm.newChat() })
+        TopBar(ui, showMenu, onMenu, sidebar, onModel = { modelOpen = true }, onNew = { vm.newChat() }, onOptions = { optionsOpen = true })
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
             if (messages.isEmpty()) {
                 StartScreen(ui, vm, onSettings) { prompt, needsFile ->
@@ -633,7 +765,8 @@ private fun ChatScreen(
                 ) {
                     items(messages, key = { it.id }) { m ->
                         val typing = ui.generating && m === messages.last() && m.role == Role.ASSISTANT
-                        MessageRow(m, typing = typing, actions = actions, liveCpu = if (typing) ui.liveCpu else -1)
+                        MessageRow(m, typing = typing, actions = actions, liveCpu = if (typing) ui.liveCpu else -1,
+                            showThoughts = ui.showThoughts, showStats = ui.showStats)
                     }
                 }
             }
@@ -645,6 +778,7 @@ private fun ChatScreen(
         )
     }
     if (modelOpen) ModelSheet(ui, vm, onDismiss = { modelOpen = false }, onSettings = onSettings)
+    if (optionsOpen) ChatOptionsSheet(ui, vm, onDismiss = { optionsOpen = false }, onInstructions = onInstructions)
     if (attachOpen) AttachSheet(vm, onDismiss = { attachOpen = false }, setPrompt = { text = it })
 }
 
@@ -657,6 +791,7 @@ private class MessageActions(
     val open: (Attachment) -> Unit,
     val shareFile: (Attachment) -> Unit,
     val hasSignature: Boolean,
+    val save: (ChatMessage) -> Unit = {},
 )
 
 // ---------------------------------------------------------------- Attachment sheet (image 3)
@@ -727,23 +862,23 @@ private fun BigTile(icon: ImageVector, label: String, modifier: Modifier, onClic
 // ---------------------------------------------------------------- Messages (image 6)
 
 @Composable
-private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions, liveCpu: Int = -1) {
+private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions, liveCpu: Int = -1, showThoughts: Boolean = true, showStats: Boolean = true) {
     if (m.role == Role.USER) {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
             Column(
                 Modifier.fillMaxWidth(0.8f).wrapContentWidth(Alignment.End)
-                    .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomEnd = 4.dp, bottomStart = 18.dp))
-                    .background(FK.Surface2).padding(horizontal = 14.dp, vertical = 10.dp),
+                    .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 6.dp, bottomStart = 20.dp))
+                    .background(FK.Accent).padding(horizontal = 14.dp, vertical = 10.dp),
             ) {
-                SelectionContainer { Text(m.text, fontSize = 14.sp, lineHeight = 20.sp, color = FK.Text) }
+                SelectionContainer { Text(m.text, fontSize = 16.sp, lineHeight = 22.sp, color = FK.OnAccent) }
                 m.attachments.forEach { a ->
                     Row(
                         Modifier.padding(top = 8.dp).clickable { actions.open(a) },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Default.AttachFile, null, tint = FK.Muted, modifier = Modifier.size(14.dp))
+                        Icon(Icons.Default.AttachFile, null, tint = FK.OnAccent, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text(a.name, fontSize = 12.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(a.name, fontSize = 13.sp, color = FK.OnAccent, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -770,7 +905,7 @@ private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions,
                 }
             }
             val stillThinking = typing && m.text.isEmpty() && m.thoughts.isNotEmpty()
-            if (m.thoughts.isNotEmpty()) Thoughts(m.thoughts, stillThinking, liveCpu)
+            if (m.thoughts.isNotEmpty() && (showThoughts || stillThinking)) Thoughts(m.thoughts, stillThinking, liveCpu)
             if (doc == null) {
                 if (!stillThinking) AnswerText(
                     textColor,
@@ -795,13 +930,14 @@ private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions,
                 if (parts.after.isNotBlank()) AnswerText(textColor, DocumentParser.clean(parts.after))
             }
             m.attachments.forEach { a -> DocCard(a, actions) }
-            if (!typing && (m.tokens > 0 || m.answerMs > 0)) AnswerStats(m)
+            if (showStats && !typing && (m.tokens > 0 || m.answerMs > 0)) AnswerStats(m)
             if (!typing && !m.isError && m.text.isNotBlank()) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp).offset(x = (-10).dp)) {
                     SmallAction(Icons.Default.ContentCopy, "Kopieren") { actions.copy(clean) }
                     SmallAction(Icons.Default.PictureAsPdf, "Als PDF") { actions.savePdf(exportText) }
                     SmallAction(if (actions.speakingId == m.id) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
                         if (actions.speakingId == m.id) "Vorlesen stoppen" else "Vorlesen") { actions.speak(m.id, DocumentParser.spoken(m.text)) }
+                    SmallAction(Icons.Default.StarBorder, "Merken") { actions.save(m) }
                     SmallAction(Icons.Default.Share, "Teilen") { actions.sharePdf(exportText) }
                 }
             }
@@ -832,7 +968,7 @@ private fun Thoughts(text: String, thinking: Boolean, liveCpu: Int) {
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(if (thinking) "Denkt nach…" else "Gedanken", fontSize = 12.sp, color = FK.Muted)
+        Text(if (thinking) "💭 Denkt nach…" else "💭 Gedanken", fontSize = 13.sp, color = FK.Muted)
         if (thinking && liveCpu >= 0) { Spacer(Modifier.width(8.dp)); Text("CPU $liveCpu %", fontSize = 12.sp, color = FK.Accent) }
         Spacer(Modifier.width(8.dp))
         Text(if (open) "▲" else "▼", fontSize = 11.sp, color = FK.Muted)
@@ -855,7 +991,7 @@ private fun SmallAction(icon: ImageVector, label: String, onClick: () -> Unit) {
 
 @Composable
 private fun AnswerText(color: androidx.compose.ui.graphics.Color, text: String) {
-    SelectionContainer { Text(text, fontSize = 14.sp, lineHeight = 21.7.sp, color = color) }
+    SelectionContainer { Text(text, fontSize = 16.sp, lineHeight = 24.sp, color = color) }
 }
 
 /** Finished PDF in an answer: card with page count (image 6). Tap = open, long press = share. */
@@ -950,8 +1086,8 @@ private fun InputBar(
 
         val shape = RoundedCornerShape(26.dp)
         Column(
-            Modifier.widthIn(max = 760.dp).fillMaxWidth().clip(shape).background(FK.Surface).border(1.dp, FK.Line, shape)
-                .padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 10.dp),
+            Modifier.widthIn(max = 760.dp).fillMaxWidth().clip(shape).background(FK.Surface).border(0.5.dp, FK.Surface3, shape)
+                .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         ) {
             if (ui.pending.isNotEmpty() || ui.importing) {
                 Row(
@@ -978,38 +1114,36 @@ private fun InputBar(
                     }
                 }
             }
-            Box(Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 2.dp, bottom = 14.dp)) {
-                if (text.isEmpty()) Text(
-                    when {
-                        recognizing -> "Erkenne…"; dictating -> "Ich höre zu…"
-                        ui.pending.isNotEmpty() -> "Frage zum Anhang …"; ui.webSearch -> "Im Internet nachfragen …"
-                        ui.current == null -> "Frag etwas oder häng ein Schreiben an …"
-                        else -> "Antworten …"
-                    },
-                    fontSize = 16.sp, color = FK.Dim,
-                )
-                BasicTextField(
-                    value = text, onValueChange = setText, maxLines = 5,
-                    textStyle = TextStyle(fontFamily = Inter, fontSize = 16.sp, color = FK.Text, lineHeight = 22.sp),
-                    cursorBrush = SolidColor(FK.Accent),
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 140.dp),
-                )
-            }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                RoundOutline(onAttach) { Icon(Icons.Default.Add, "Hinzufügen", tint = FK.Muted, modifier = Modifier.size(20.dp)) }
-                FkChip("Web", Icons.Default.Language, active = ui.webSearch, onClick = vm::toggleWeb)
-                Spacer(Modifier.weight(1f))
-                if (!ui.generating) RoundOutline(dictate) {
+                RoundOutline(onAttach) { Icon(Icons.Default.Add, "Hinzufügen", tint = FK.Text, modifier = Modifier.size(20.dp)) }
+                Box(Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 8.dp)) {
+                    if (text.isEmpty()) Text(
+                        when {
+                            recognizing -> "Erkenne…"; dictating -> "Ich höre zu…"
+                            ui.pending.isNotEmpty() -> "Frage zum Anhang …"; ui.webSearch -> "Im Internet nachfragen …"
+                            ui.current == null -> "Frag etwas …"
+                            else -> "Antworten …"
+                        },
+                        fontSize = 16.sp, color = FK.Dim,
+                    )
+                    BasicTextField(
+                        value = text, onValueChange = setText, maxLines = 5,
+                        textStyle = TextStyle(fontFamily = Inter, fontSize = 16.sp, color = FK.Text, lineHeight = 22.sp),
+                        cursorBrush = SolidColor(FK.Accent),
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 140.dp),
+                    )
+                }
+                if (!ui.generating && text.isBlank()) RoundOutline(dictate) {
                     if (recognizing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = FK.Accent)
                     else Icon(if (dictating) Icons.Default.MicOff else Icons.Default.Mic, if (dictating) "Diktat beenden" else "Diktieren",
-                        tint = if (dictating) FK.Accent else FK.Muted, modifier = Modifier.size(20.dp))
+                        tint = if (dictating) FK.Accent else FK.Text, modifier = Modifier.size(20.dp))
                 }
                 val canSend = (text.isNotBlank() || ui.pending.isNotEmpty()) && !ui.importing
                 SendButton(
                     icon = when {
                         ui.generating -> Icons.Default.Stop
                         text.isBlank() && ui.pending.isEmpty() && !dictating -> Icons.Default.GraphicEq
-                        else -> Icons.AutoMirrored.Filled.Send
+                        else -> Icons.Default.ArrowUpward
                     },
                     label = when { ui.generating -> "Stopp"; text.isBlank() && ui.pending.isEmpty() -> "Sprachmodus"; else -> "Senden" },
                     enabled = ui.generating || canSend || (text.isBlank() && ui.pending.isEmpty() && !dictating),
@@ -1028,9 +1162,9 @@ private fun InputBar(
 private fun extra(text: String) = if (text.isNotBlank()) "\nZusätzliche Hinweise: $text" else ""
 
 @Composable
-private fun SendButton(icon: ImageVector, label: String, enabled: Boolean, size: Dp = 44.dp, onClick: () -> Unit) {
+private fun SendButton(icon: ImageVector, label: String, enabled: Boolean, size: Dp = 38.dp, onClick: () -> Unit) {
     Box(
-        Modifier.size(size).clip(CircleShape).background(if (enabled) FK.Accent else FK.Line).clickable(enabled = enabled, onClick = onClick),
+        Modifier.size(size).clip(CircleShape).background(if (enabled) androidx.compose.ui.graphics.Color.White else FK.Surface3).clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) { Icon(icon, label, tint = FK.OnAccent, modifier = Modifier.size(22.dp)) }
+    ) { Icon(icon, label, tint = androidx.compose.ui.graphics.Color.Black, modifier = Modifier.size(22.dp)) }
 }

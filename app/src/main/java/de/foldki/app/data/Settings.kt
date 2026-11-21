@@ -48,6 +48,32 @@ class Settings(context: Context) {
             else prefs.edit().putString("system_prompt", v).apply()
         }
 
+    /** "Meine Anweisungen": only texts the user wrote (nothing built in). */
+    var instructions: List<Instruction>
+        get() = Instruction.listFromJson(prefs.getString("instructions", "[]"))
+        set(v) = prefs.edit().putString("instructions", Instruction.listToJson(v)).apply()
+
+    /** Instruction for new chats ("" = the system instruction from Einstellungen). */
+    var defaultInstruction: String
+        get() = prefs.getString("default_instruction", "") ?: ""
+        set(v) = prefs.edit().putString("default_instruction", v).apply()
+
+    var creativity: Creativity
+        get() = runCatching { Creativity.valueOf(prefs.getString("creativity", "STANDARD") ?: "STANDARD") }.getOrDefault(Creativity.STANDARD)
+        set(v) = prefs.edit().putString("creativity", v.name).apply()
+
+    var answerLength: AnswerLength
+        get() = runCatching { AnswerLength.valueOf(prefs.getString("answer_length", "FREE") ?: "FREE") }.getOrDefault(AnswerLength.FREE)
+        set(v) = prefs.edit().putString("answer_length", v.name).apply()
+
+    var showThoughts: Boolean
+        get() = prefs.getBoolean("show_thoughts", true)
+        set(v) = prefs.edit().putBoolean("show_thoughts", v).apply()
+
+    var showStats: Boolean
+        get() = prefs.getBoolean("show_stats", true)
+        set(v) = prefs.edit().putBoolean("show_stats", v).apply()
+
     var stVoice: String
         get() = prefs.getString("st_voice", "tessa") ?: "tessa"
         set(v) = prefs.edit().putString("st_voice", v).apply()

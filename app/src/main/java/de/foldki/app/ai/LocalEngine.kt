@@ -47,6 +47,7 @@ class LocalEngine(context: Context) {
     private var kept: Conversation? = null
     private var keptKey = ""
     private var keptSystem = ""
+    private var keptTemp: Double? = null
     private var keptIds: List<String> = emptyList()
     private var keptTurns = 0
     private var keptChars = 0
@@ -108,15 +109,15 @@ class LocalEngine(context: Context) {
      * Chat answer, raw text (thinking included). [system] may be empty (then no system instruction at all).
      * [earlier] = all earlier turns of this chat; [key] = chat id. Emits text pieces (≈ one per token).
      */
-    fun chat(key: String, system: String, earlier: List<Turn>, question: String, questionId: String, answerId: String): Flow<String> = flow {
+    fun chat(key: String, system: String, earlier: List<Turn>, question: String, questionId: String, answerId: String, temperature: Double? = null): Flow<String> = flow {
         val e = engine ?: throw IllegalStateException("Modell ist nicht geladen.")
         val ids = earlier.map { it.id }
         val budget = inputBudgetChars
         // Reuse the open conversation only while everything still fits into the model's context.
-        val reuse = kept != null && keptKey == key && keptSystem == system && keptIds == ids && keptTurns < MAX_KEPT_TURNS &&
+        val reuse = kept != null && keptKey == key && keptSystem == system && keptTemp == temperature && keptIds == ids && keptTurns < MAX_KEPT_TURNS &&
             system.length + keptChars + question.length <= budget
-        var conv = if (reuse) kept!! else open(e, system, earlier, budget - system.length - question.length)
-            .also { kept = it; keptKey = key; keptSystem = system; keptTurns = 0 }
+        var conv = if (reuse) kept!! else open(e, system, earlier, budget - system.length - question.length, temperature)
+            .also { kept = it; keptKey = key; keptSystem = system; keptTemp = temperature; keptTurns = 0 }
         keptIds = emptyList() // only valid again after a complete answer
         val sb = StringBuilder()
         var done = false
@@ -127,7 +128,7 @@ class LocalEngine(context: Context) {
                 if (t is kotlinx.coroutines.CancellationException || !reuse || sb.isNotEmpty()) throw t
                 // The open conversation is full or broken: start it fresh once.
                 dropKept()
-                conv = open(e, system, earlier, budget - system.length - question.length).also { kept = it; keptKey = key; keptSystem = system; keptTurns = 0 }
+                conv = open(e, system, earlier, budget - system.length - question.length, temperature).also { kept = it; keptKey = key; keptSystem = system; keptTemp = temperature; keptTurns = 0 }
                 conv.sendMessageAsync(question).collect { m -> val x = text(m); if (x.isNotEmpty()) { sb.append(x); emit(x) } }
             }
             done = true
@@ -140,7 +141,7 @@ class LocalEngine(context: Context) {
     }.flowOn(Dispatchers.Default)
 
     /** New conversation with the newest earlier turns that fit into [room] characters. */
-    private fun open(e: Engine, system: String, earlier: List<Turn>, room: Int): Conversation {
+    private fun open(e: Engine, system: String, earlier: List<Turn>, room: Int, temperature: Double? = null): Conversation {
         dropKept()
         val picked = ArrayList<Turn>()
         var used = 0
@@ -151,8 +152,10 @@ class LocalEngine(context: Context) {
         val fit = picked.dropWhile { !it.user }
         keptChars = fit.sumOf { it.text.length }
         val initial = fit.map { if (it.user) Message.user(it.text) else Message.model(it.text) }
-        return if (system.isBlank()) e.createConversation(ConversationConfig(initialMessages = initial))
-        else e.createConversation(ConversationConfig(systemInstruction = Contents.of(system), initialMessages = initial))
+        // "Kreativität": null = the model's own sampler (nothing added).
+        val sampler = temperature?.let { SamplerConfig(topK = 40, topP = 0.95, temperature = it) }
+        return if (system.isBlank()) e.createConversation(ConversationConfig(initialMessages = initial, samplerConfig = sampler))
+        else e.createConversation(ConversationConfig(systemInstruction = Contents.of(system), initialMessages = initial, samplerConfig = sampler))
     }
 
     /** Short internal task (search terms, reading a letter, daily briefing). Returns the raw text. */
@@ -209,7 +212,7 @@ class LocalEngine(context: Context) {
 
     private fun dropKept() {
         val c = kept
-        kept = null; keptIds = emptyList(); keptKey = ""; keptSystem = ""; keptTurns = 0; keptChars = 0
+        kept = null; keptIds = emptyList(); keptKey = ""; keptSystem = ""; keptTemp = null; keptTurns = 0; keptChars = 0
         runCatching { c?.close() }
     }
 

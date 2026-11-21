@@ -2,6 +2,10 @@ package de.foldki.app.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -79,14 +83,14 @@ import de.foldki.app.voice.Supertonic
  * Everything is saved when a page or the settings are left.
  */
 @Composable
-fun SettingsScreen(vm: ChatViewModel, ui: UiState, onBack: () -> Unit) {
+fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, onBack: () -> Unit) {
     var key by remember { mutableStateOf(vm.settings.apiKey) }
     var model by remember { mutableStateOf(vm.settings.claudeModel) }
     var system by remember { mutableStateOf(vm.settings.systemPrompt) }
     var ghToken by remember { mutableStateOf(vm.githubToken) }
     var rate by remember { mutableFloatStateOf(vm.settings.ttsRate) }
     var stVoice by remember { mutableStateOf(vm.settings.stVoice) }
-    var page by rememberSaveable { mutableStateOf<String?>(null) }
+    var page by rememberSaveable(startPage) { mutableStateOf(startPage) }
     var editProfile by rememberSaveable { mutableStateOf<String?>(null) }
     val stStatus by vm.stStatus.collectAsStateWithLifecycle()
     val stBusy by vm.stBusy.collectAsStateWithLifecycle()
@@ -100,22 +104,36 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, onBack: () -> Unit) {
     }
     DisposableEffect(Unit) { onDispose { vm.voice.stopSpeaking() } }
 
-    val back: () -> Unit = { saveAll(); if (page == "hf") page = "models" else if (page != null) page = null else onBack() }
+    // Opened directly from the menu: back closes the page; inside the settings: back to the overview.
+    val back: () -> Unit = {
+        saveAll()
+        when {
+            page == startPage -> onBack()
+            page == "hf" && startPage != "hf" -> page = "models"
+            page != null -> page = startPage
+            else -> onBack()
+        }
+    }
     BackHandler { back() }
 
     val title = when (page) {
-        "nano" -> "Gemini Nano"; "models" -> "KI-Modelle"; "hf" -> "Modelle"; "claude" -> "Claude (online)"; "github" -> "GitHub"
-        "sender" -> "Absender & Unterschrift"; "voice" -> "Stimme"; "brief" -> "Tagesstart"
+        "nano" -> "Gemini Nano"; "models" -> "Modelle"; "hf" -> "Erkunden"; "claude" -> "Claude (online)"; "github" -> "GitHub"
+        "sender" -> "Absender & Unterschrift"; "voice" -> "Stimmen"; "brief" -> "Tagesstart"
         "system" -> "Systemanweisung"; "memory" -> "Gedächtnis"; "report" -> "Fehlerbericht"
+        "history" -> "Verlauf"; "saved" -> "Gemerkt"; "instructions" -> "Meine Anweisungen"; "tools" -> "Werkzeuge"
         else -> "Einstellungen"
     }
 
     Surface(color = FK.Bg, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
-            Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück", tint = FK.Text) }
-                Spacer(Modifier.width(4.dp))
-                Text(title, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1)
+            Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(38.dp).clip(androidx.compose.foundation.shape.CircleShape).background(FK.Surface).clickable(onClick = back),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück", tint = FK.Text, modifier = Modifier.size(20.dp)) }
+            }
+            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp), contentAlignment = Alignment.TopCenter) {
+                LargeTitle(title, Modifier.widthIn(max = 720.dp).fillMaxWidth())
             }
             // The Hugging Face browser needs the whole height (a web page scrolls itself).
             if (page == "hf") Box(Modifier.weight(1f).fillMaxWidth()) { HfBrowser(vm, ui, onDone = { page = "models" }) }
@@ -135,6 +153,10 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, onBack: () -> Unit) {
                         "system" -> SystemPage(system, { system = it })
                         "memory" -> MemoryPage(vm)
                         "report" -> ReportPage(vm)
+                        "history" -> HistoryPage(vm, ui, saved = false, onOpen = onBack)
+                        "saved" -> HistoryPage(vm, ui, saved = true, onOpen = onBack)
+                        "instructions" -> InstructionsPage(vm, ui)
+                        "tools" -> ToolsPage(vm, ui, ghToken) { page = it }
                     }
                 }
             }
@@ -157,18 +179,14 @@ private fun Overview(
     val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?" }
     val mem by vm.memories.collectAsStateWithLifecycle()
 
+    SectionLabel("KI")
     Group {
-        SettingRow(
-            title = active?.name?.ifBlank { active.title } ?: "Absender anlegen",
-            subtitle = if (active == null) "Für Briefe: Name, Adresse, Unterschrift"
-                else "Absender aktiv · " + if (vm.signatures.exists(active.id)) "Unterschrift gespeichert" else "keine Unterschrift",
-            leading = { Avatar(active?.effectiveInitials ?: "", 34.dp) },
-            onClick = { open("sender") },
-        )
-    }
-
-    SectionLabel("KI-Modelle")
-    Group {
+        SettingRow("Systemanweisung", if (system.isBlank()) "leer – die KI bekommt keine Anweisung" else "eigene Anweisung",
+            leading = { Tile(Icons.Default.Edit, FK.T4) }, onClick = { open("system") })
+        GroupDivider()
+        SettingRow("Meine Anweisungen", if (ui.instructions.isEmpty()) "noch keine" else "${ui.instructions.size} gespeichert",
+            leading = { Tile(Icons.Default.Psychology, FK.T7) }, onClick = { open("instructions") })
+        GroupDivider()
         SettingRow(
             "Modell",
             ui.activeName + when {
@@ -182,32 +200,30 @@ private fun Overview(
         }
         GroupDivider()
         SettingRow("Gemini Nano", if (ui.usesNano) "gewählt · im Handy eingebaut" else "im Handy eingebaut · nur wenn gewählt",
-            leading = { Tile(Icons.Default.PhoneAndroid, FK.T1) }, onClick = { open("nano") })
+            leading = { Tile(Icons.Default.PhoneAndroid, FK.T6) }, onClick = { open("nano") })
     }
 
-    SectionLabel("Zugänge")
+    SectionLabel("Briefe")
     Group {
         SettingRow(
-            "GitHub",
-            when {
-                ghToken.isBlank() -> "Nicht verbunden · nur mit Freigabe"
-                login.isNotBlank() -> "Verbunden als $login · nur mit Freigabe"
-                else -> "Token eingetragen · nur mit Freigabe"
-            },
-            leading = { Tile(Icons.Default.Code, FK.T6) }, onClick = { open("github") },
+            title = active?.name?.ifBlank { active.title } ?: "Absender anlegen",
+            subtitle = if (active == null) "Name, Adresse, Unterschrift"
+                else "Absender aktiv · " + if (vm.signatures.exists(active.id)) "Unterschrift gespeichert" else "keine Unterschrift",
+            leading = { Avatar(active?.effectiveInitials ?: "", 30.dp) },
+            onClick = { open("sender") },
         )
+        GroupDivider()
+        SettingRow("Absenderprofile & Unterschrift", if (list.size == 1) "1 Profil" else "${list.size} Profile",
+            leading = { Tile(Icons.Default.Draw, FK.T1) }, onClick = { open("sender") })
     }
 
-    SectionLabel("Briefe & Stimme")
+    SectionLabel("Stimme & Tagesstart")
     Group {
-        SettingRow("Absender & Unterschrift", if (list.size == 1) "1 Profil" else "${list.size} Profile",
-            leading = { Tile(Icons.Default.Draw, FK.T5) }, onClick = { open("sender") })
-        GroupDivider()
         SettingRow(
-            "Stimme",
+            "Stimmen",
             if (stReady) (Supertonic.VOICES[stVoice]?.second?.substringBefore(" (") ?: stVoice) + " · Tempo " + "%.1f".format(java.util.Locale.GERMANY, rate) + "×"
             else "Noch nicht eingerichtet",
-            leading = { Tile(Icons.AutoMirrored.Filled.VolumeUp, FK.T4) }, onClick = { open("voice") },
+            leading = { Tile(Icons.AutoMirrored.Filled.VolumeUp, FK.T5) }, onClick = { open("voice") },
         )
         GroupDivider()
         SettingRow("Tagesstart", if (brief) "an · morgens 5–11 Uhr" else "aus",
@@ -216,16 +232,156 @@ private fun Overview(
         }
     }
 
-    SectionLabel("Allgemein")
+    SectionLabel("Verbindungen")
     Group {
-        SettingRow("Systemanweisung", if (system.isBlank()) "leer – die KI bekommt keine Anweisung" else "Eigene Anweisung",
-            leading = { Tile(Icons.Default.Edit, FK.T6) }, onClick = { open("system") })
-        GroupDivider()
+        SettingRow(
+            "GitHub",
+            when {
+                ghToken.isBlank() -> "nicht verbunden"
+                login.isNotBlank() -> "verbunden als $login"
+                else -> "Token eingetragen"
+            },
+            leading = { Tile(Icons.Default.Code, FK.T6) }, onClick = { open("github") },
+        )
+    }
+
+    SectionLabel("Hilfe")
+    Group {
         SettingRow("Gedächtnis", if (mem.isEmpty()) "noch nichts gemerkt" else "${mem.size} Einträge",
-            leading = { Tile(Icons.Default.Psychology, FK.T6) }, onClick = { open("memory") })
+            leading = { Tile(Icons.Default.Psychology, FK.T8) }, onClick = { open("memory") })
         GroupDivider()
         SettingRow("Fehlerbericht", "Version $version",
-            leading = { Tile(Icons.Default.ReportProblem, FK.T6) }, onClick = { open("report") })
+            leading = { Tile(Icons.Default.ReportProblem, FK.T5) }, onClick = { open("report") })
+    }
+}
+
+/** "Verlauf" (all chats) or "Gemerkt" (saved answers), switchable at the top. */
+@Composable
+private fun HistoryPage(vm: ChatViewModel, ui: UiState, saved: Boolean, onOpen: () -> Unit) {
+    var tab by rememberSaveable { mutableStateOf(if (saved) 1 else 0) }
+    var q by rememberSaveable { mutableStateOf("") }
+    Segmented(listOf("Chats", "Gemerkt ☆"), tab) { tab = it }
+    Spacer(Modifier.height(10.dp))
+    Group { FkField("Suchen", q, { q = it }) }
+    val needle = q.trim().lowercase()
+    if (tab == 0) {
+        val chats = ui.conversations.filter { c -> needle.isEmpty() || c.title.lowercase().contains(needle) || c.messages.any { it.text.lowercase().contains(needle) } }
+        if (chats.isEmpty()) Note("Noch keine Chats.", Modifier.padding(16.dp))
+        chats.groupBy { dayLabel(it.updatedAt) }.forEach { (day, list) ->
+            SectionLabel(day)
+            Group {
+                list.forEachIndexed { i, c ->
+                    if (i > 0) GroupDivider()
+                    val model = c.messages.lastOrNull { it.model != null }?.model.orEmpty()
+                    val time = java.text.SimpleDateFormat("dd.MM. HH:mm", java.util.Locale.GERMANY).format(java.util.Date(c.updatedAt))
+                    SettingRow(c.title, listOf(model, time).filter { it.isNotBlank() }.joinToString(" · "),
+                        leading = { Tile(Icons.Default.ChatBubbleOutline, FK.T2) }, onClick = { vm.open(c.id); onOpen() })
+                }
+            }
+        }
+    } else {
+        val list = ui.saved.filter { needle.isEmpty() || it.text.lowercase().contains(needle) }
+        if (list.isEmpty()) Note("Noch nichts gemerkt. Tippe unter einer Antwort auf ☆.", Modifier.padding(16.dp))
+        list.forEach { a ->
+            Spacer(Modifier.height(10.dp))
+            Card {
+                Text(a.text.take(600), fontSize = 15.sp, color = FK.Text, lineHeight = 21.sp)
+                Spacer(Modifier.height(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(listOf(a.model, a.chat).filter { it.isNotBlank() }.joinToString(" · "), fontSize = 12.sp, color = FK.Muted, modifier = Modifier.weight(1f), maxLines = 1)
+                    Text("Kopieren", color = FK.Accent, fontSize = 14.sp, modifier = Modifier.clickable {
+                        (vm.getApplication<android.app.Application>().getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                            .setPrimaryClip(android.content.ClipData.newPlainText("Text", a.text))
+                        vm.notify("Kopiert")
+                    }.padding(6.dp))
+                    Text("Löschen", color = FK.Danger, fontSize = 14.sp, modifier = Modifier.clickable { vm.removeSaved(a.id) }.padding(6.dp))
+                }
+            }
+        }
+    }
+}
+
+private fun dayLabel(t: Long): String {
+    val cal = java.util.Calendar.getInstance().apply {
+        set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+    }
+    val day = 24L * 3600 * 1000
+    return when { t >= cal.timeInMillis -> "Heute"; t >= cal.timeInMillis - day -> "Gestern"; t >= cal.timeInMillis - 6 * day -> "Diese Woche"; else -> "Älter" }
+}
+
+/** "Meine Anweisungen": texts the user writes; one is chosen per chat. Nothing is built in. */
+@Composable
+private fun InstructionsPage(vm: ChatViewModel, ui: UiState) {
+    var edit by remember { mutableStateOf<de.foldki.app.data.Instruction?>(null) }
+    Note("Nur was du selbst schreibst – nichts ist eingebaut. Im Chat über ⋮ eine Anweisung wählen.", Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    edit?.let { e ->
+        var name by remember(e.id) { mutableStateOf(e.name) }
+        var emoji by remember(e.id) { mutableStateOf(e.emoji) }
+        var text by remember(e.id) { mutableStateOf(e.text) }
+        SectionLabel(if (ui.instructions.any { it.id == e.id }) "Bearbeiten" else "Neu")
+        Group {
+            FkField("Symbol (Emoji)", emoji, { emoji = it.take(4) })
+            FkField("Name", name, { name = it })
+            FkField("Anweisung an die KI", text, { text = it }, minLines = 6)
+            Row(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FkButton("Abbrechen", Modifier.weight(1f), ghost = true) { edit = null }
+                FkButton("Sichern", Modifier.weight(1f), enabled = name.isNotBlank() && text.isNotBlank()) {
+                    vm.saveInstruction(e.copy(name = name.trim(), emoji = emoji.ifBlank { "💬" }, text = text.trim())); edit = null
+                }
+            }
+            if (ui.instructions.any { it.id == e.id }) {
+                Text("Löschen", color = FK.Danger, fontSize = 15.sp, modifier = Modifier.padding(start = 14.dp, bottom = 14.dp).clickable { vm.deleteInstruction(e.id); edit = null }.padding(6.dp))
+            }
+        }
+        return
+    }
+    if (ui.instructions.isNotEmpty()) {
+        SectionLabel("Deine Anweisungen")
+        Group {
+            ui.instructions.forEachIndexed { i, ins ->
+                if (i > 0) GroupDivider()
+                SettingRow(ins.name, "„" + ins.text.replace("\n", " ").take(60) + "“",
+                    leading = { Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) { Text(ins.emoji, fontSize = 22.sp) } },
+                    onClick = { edit = ins }) {
+                    if (ui.newInstruction == ins.id) Tag("Aktiv", on = true) else Chevron()
+                }
+            }
+        }
+    }
+    SectionLabel("Ohne Anweisung")
+    Group {
+        SettingRow("Standard", "die Systemanweisung aus den Einstellungen (Standard: leer)", leading = { Tile(Icons.Default.Edit, FK.T6) },
+            onClick = { vm.setChatInstruction("") }) {
+            if (ui.newInstruction.isEmpty()) Tag("Aktiv", on = true)
+        }
+    }
+    Spacer(Modifier.height(16.dp))
+    FkButton("＋ Neue Anweisung") { edit = de.foldki.app.data.Instruction(name = "", text = "") }
+}
+
+/** "Werkzeuge": what the AI may do. Changes on GitHub always need approval. */
+@Composable
+private fun ToolsPage(vm: ChatViewModel, ui: UiState, ghToken: String, open: (String) -> Unit) {
+    var brief by remember { mutableStateOf(vm.settings.dailyBriefEnabled) }
+    Note("Was die KI für dich tun darf. Änderungen nur nach deiner Freigabe.", Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    Spacer(Modifier.height(6.dp))
+    Group {
+        SettingRow("Websuche", "sucht mit deiner Frage", leading = { Tile(Icons.Default.Language, FK.T7) }) { FkToggle(ui.webSearch, { vm.setWeb(it) }) }
+        GroupDivider()
+        SettingRow("GitHub", if (ghToken.isBlank()) "Token eintragen" else "lesen sofort · ändern mit Freigabe",
+            leading = { Tile(Icons.Default.Code, FK.T6) }, onClick = { open("github") })
+        GroupDivider()
+        SettingRow("Briefe & PDF", "Vorschau, Unterschrift, Absender", leading = { Tile(Icons.Default.MailOutline, FK.T1) }, onClick = { open("sender") })
+        GroupDivider()
+        SettingRow("Tagesstart", "Kalender und offene Punkte", leading = { Tile(Icons.Default.WbSunny, FK.T5) }) {
+            FkToggle(brief, { on -> brief = on; vm.setDailyBrief(on) })
+        }
+    }
+    SectionLabel("Erweitert")
+    Group {
+        SettingRow("MCP-Werkzeuge", "eigene Werkzeug-Server – kommt in einem späteren Schritt", leading = { Tile(Icons.Default.Build, FK.T8) }) {
+            Pill("bald", FK.Warn)
+        }
     }
 }
 

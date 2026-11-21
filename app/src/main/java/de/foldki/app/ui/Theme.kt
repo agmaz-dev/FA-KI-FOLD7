@@ -12,30 +12,36 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import de.foldki.app.R
 
-/** Design tokens of the Fold KI design (dark, warm grey + orange). Same values as the approved mock-ups. */
+/** Design tokens of the Fold KI design (from 4.0: dark, Apple-like – black, grey groups, blue accent, green switches). */
 object FK {
-    val Bg = Color(0xFF1C1B1A)
-    val Surface = Color(0xFF262524)
-    val Surface2 = Color(0xFF2F2D2B)
-    val Line = Color(0xFF3A3734)
-    val Text = Color(0xFFF2EEE9)
-    val Muted = Color(0xFFA8A29B)
-    val Dim = Color(0xFF77716A)
-    val Accent = Color(0xFFE07A52)
-    val AccentSoft = Color(0x24E07A52) // 14 %
-    val OnAccent = Color(0xFF1C1B1A)
-    val Ok = Color(0xFF6FCF8A)
-    val OkSoft = Color(0x266FCF8A)
-    val Side = Color(0xFF181716)
-    val Scrim = Color(0x8C000000)
+    val Bg = Color(0xFF000000)
+    val Surface = Color(0xFF1C1C1E)
+    val Surface2 = Color(0xFF2C2C2E)
+    val Surface3 = Color(0xFF3A3A3C)
+    val Line = Color(0x8C545458)
+    val Text = Color(0xFFFFFFFF)
+    val Muted = Color(0x99EBEBF5)
+    val Dim = Color(0x4DEBEBF5)
+    val Accent = Color(0xFF0A84FF)
+    val AccentSoft = Color(0x2E0A84FF)
+    val OnAccent = Color(0xFFFFFFFF)
+    val Ok = Color(0xFF30D158)
+    val OkSoft = Color(0x2930D158)
+    val Warn = Color(0xFFFF9F0A)
+    val Danger = Color(0xFFFF453A)
+    val Purple = Color(0xFFBF5AF2)
+    val Side = Color(0xFF1C1C1E)
+    val Scrim = Color(0x99000000)
 
-    // Icon tiles (background, symbol)
-    val T1 = Color(0xFF3B2A22) to Accent
-    val T2 = Color(0xFF22313B) to Color(0xFF7FB6E0)
-    val T3 = Color(0xFF2A3523) to Color(0xFF9FCF72)
-    val T4 = Color(0xFF352A3B) to Color(0xFFC49BE0)
-    val T5 = Color(0xFF3B3522) to Color(0xFFE8C45A)
-    val T6 = Surface2 to Muted
+    // Icon tiles (background, symbol): solid colour with a white symbol, like iOS settings.
+    val T1 = Color(0xFFFF9F0A) to Color.White
+    val T2 = Color(0xFF0A84FF) to Color.White
+    val T3 = Color(0xFF30D158) to Color.White
+    val T4 = Color(0xFFBF5AF2) to Color.White
+    val T5 = Color(0xFFFF375F) to Color.White
+    val T6 = Color(0xFF636366) to Color.White
+    val T7 = Color(0xFF5E5CE6) to Color.White
+    val T8 = Color(0xFF30B0C7) to Color.White
 }
 
 val Accent = FK.Accent

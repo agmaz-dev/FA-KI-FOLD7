@@ -58,4 +58,8 @@ data class Conversation(
     val title: String = "Neuer Chat",
     val messages: List<ChatMessage> = emptyList(),
     val updatedAt: Long = System.currentTimeMillis(),
+    /** Instruction of this chat ("Meine Anweisungen" id); "" = the system instruction from Einstellungen. */
+    val instruction: String = "",
+    /** Inkognito: never written to the phone's storage. */
+    val incognito: Boolean = false,
 )

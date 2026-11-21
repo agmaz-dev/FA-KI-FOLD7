@@ -19,6 +19,7 @@ class ChatStore(context: Context) {
                     id = c.getString("id"),
                     title = c.optString("title", "Chat"),
                     updatedAt = c.optLong("updatedAt"),
+                    instruction = c.optString("instruction"),
                     messages = (0 until msgs.length()).map { j ->
                         val m = msgs.getJSONObject(j)
                         ChatMessage(
@@ -67,7 +68,7 @@ class ChatStore(context: Context) {
     @Synchronized
     fun save(conversations: List<Conversation>) {
         val arr = JSONArray()
-        conversations.forEach { c ->
+        conversations.filterNot { it.incognito }.forEach { c ->
             val msgs = JSONArray()
             c.messages.forEach { m ->
                 msgs.put(JSONObject().apply {
@@ -93,6 +94,7 @@ class ChatStore(context: Context) {
             }
             arr.put(JSONObject().apply {
                 put("id", c.id); put("title", c.title); put("updatedAt", c.updatedAt)
+                if (c.instruction.isNotEmpty()) put("instruction", c.instruction)
                 put("messages", msgs)
             })
         }

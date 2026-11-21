@@ -26,6 +26,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -55,6 +56,16 @@ data class UiState(
     /** A GitHub change waiting for the user's "Freigeben" / "Ablehnen". */
     val approval: Approval? = null,
     val githubSet: Boolean = false,
+    /** Inkognito for the current / next chat: not written to the phone's storage. */
+    val incognito: Boolean = false,
+    val instructions: List<de.foldki.app.data.Instruction> = emptyList(),
+    val saved: List<de.foldki.app.data.SavedAnswer> = emptyList(),
+    val creativity: de.foldki.app.data.Creativity = de.foldki.app.data.Creativity.STANDARD,
+    val answerLength: de.foldki.app.data.AnswerLength = de.foldki.app.data.AnswerLength.FREE,
+    val showThoughts: Boolean = true,
+    val showStats: Boolean = true,
+    /** Instruction id for a new chat. */
+    val newInstruction: String = "",
 ) {
     val usesNano: Boolean get() = activeModel == Settings.NANO
     val activeLocal: LocalModelManager.LocalModel? get() = localModels.firstOrNull { it.file == activeModel }
@@ -65,6 +76,9 @@ data class UiState(
     }
     val modelReady: Boolean get() = if (usesNano) nanoReady else activeLocal != null
     val current: Conversation? get() = conversations.firstOrNull { it.id == currentId }
+    /** Instruction of the shown chat (or of the next new chat). */
+    val chatInstruction: String get() = current?.instruction ?: newInstruction
+    val chatInstructionName: String get() = instructions.firstOrNull { it.id == chatInstruction }?.name ?: "Standard"
 }
 
 data class Approval(val title: String, val details: String)
@@ -147,8 +161,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private var job: Job? = null
 
+    private val savedStore = de.foldki.app.data.SavedStore(app)
+
     private val _ui = MutableStateFlow(
         UiState(
+            instructions = settings.instructions,
+            saved = savedStore.load(),
+            creativity = settings.creativity,
+            answerLength = settings.answerLength,
+            showThoughts = settings.showThoughts,
+            showStats = settings.showStats,
+            newInstruction = settings.defaultInstruction,
             conversations = store.load(),
             githubSet = settings.githubToken.isNotBlank(),
             webSearch = settings.webSearch,
@@ -586,7 +609,55 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         settings.systemPrompt = system
     }
 
-    fun newChat() { stop(); _ui.update { it.copy(currentId = null) } }
+    fun newChat() { stop(); _ui.update { it.copy(currentId = null, incognito = false) } }
+
+    // ---- Chat options (sheet "Dieser Chat") ----
+    fun setIncognito(on: Boolean) {
+        val cur = _ui.value.current
+        _ui.update { s -> s.copy(incognito = on, conversations = s.conversations.map { if (it.id == cur?.id) it.copy(incognito = on) else it }) }
+        persist() // an incognito chat disappears from the stored file
+    }
+
+    fun setChatInstruction(id: String) {
+        settings.defaultInstruction = id
+        val cur = _ui.value.current
+        _ui.update { s -> s.copy(newInstruction = id, conversations = s.conversations.map { if (it.id == cur?.id) it.copy(instruction = id) else it }) }
+        persist()
+    }
+
+    fun saveInstruction(i: de.foldki.app.data.Instruction) {
+        val list = settings.instructions.let { l -> if (l.any { it.id == i.id }) l.map { if (it.id == i.id) i else it } else l + i }
+        settings.instructions = list
+        _ui.update { it.copy(instructions = list) }
+    }
+
+    fun deleteInstruction(id: String) {
+        val list = settings.instructions.filterNot { it.id == id }
+        settings.instructions = list
+        if (settings.defaultInstruction == id) settings.defaultInstruction = ""
+        _ui.update { s -> s.copy(instructions = list, newInstruction = if (s.newInstruction == id) "" else s.newInstruction) }
+    }
+
+    fun setCreativity(c: de.foldki.app.data.Creativity) { settings.creativity = c; _ui.update { it.copy(creativity = c) } }
+    fun setAnswerLength(l: de.foldki.app.data.AnswerLength) { settings.answerLength = l; _ui.update { it.copy(answerLength = l) } }
+    fun setShowThoughts(on: Boolean) { settings.showThoughts = on; _ui.update { it.copy(showThoughts = on) } }
+    fun setShowStats(on: Boolean) { settings.showStats = on; _ui.update { it.copy(showStats = on) } }
+    fun setWeb(on: Boolean) { settings.webSearch = on; _ui.update { it.copy(webSearch = on) } }
+
+    // ---- Gemerkte Antworten ----
+    fun saveAnswer(m: ChatMessage) {
+        if (_ui.value.saved.any { it.text == m.text }) { notify("Schon gemerkt"); return }
+        val list = listOf(de.foldki.app.data.SavedAnswer(text = m.text, model = m.model.orEmpty(), chat = _ui.value.current?.title.orEmpty())) + _ui.value.saved
+        _ui.update { it.copy(saved = list) }
+        viewModelScope.launch(saveDispatcher) { runCatching { savedStore.save(list) } }
+        notify("Gemerkt")
+    }
+
+    fun removeSaved(id: String) {
+        val list = _ui.value.saved.filterNot { it.id == id }
+        _ui.update { it.copy(saved = list) }
+        viewModelScope.launch(saveDispatcher) { runCatching { savedStore.save(list) } }
+    }
 
     fun open(id: String) { stop(); _ui.update { it.copy(currentId = id) } }
 
@@ -620,7 +691,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val engine = if (useNano) Engine.NANO else Engine.GEMMA
 
         // Create conversation if needed and append user + empty assistant message.
-        var conv = _ui.value.current ?: Conversation(title = prompt.take(40))
+        var conv = _ui.value.current ?: Conversation(title = prompt.take(40), instruction = _ui.value.newInstruction, incognito = _ui.value.incognito)
         val userMsg = ChatMessage(role = Role.USER, text = prompt, attachments = pendingFiles)
         val botMsg = ChatMessage(role = Role.ASSISTANT, text = "", engine = engine, web = web, model = modelName)
         conv = conv.copy(messages = conv.messages + userMsg + botMsg, updatedAt = System.currentTimeMillis())
@@ -653,7 +724,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 if (letters) analyzeDocs(conv.id, history.flatMap { it.attachments })
                 val history = _ui.value.conversations.firstOrNull { it.id == conv.id }?.messages?.dropLast(1) ?: history
-                val system = buildSystem(letters, wantsLetter, followUpDoc = lastDoc != null, history = history)
+                val system = systemFor(conv.instruction)
                 logSystem = system
                 logHistory = history.size
                 if (isGitHubTask(prompt, history)) {
@@ -665,7 +736,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     } else withLocal {
                         GemmaGitHubAgent(llm, settings.githubToken).run(
-                            baseSystem = settings.systemPrompt, question = prompt,
+                            baseSystem = systemFor(conv.instruction), question = prompt,
                             onText = { t -> editMessage(conv.id, botMsg.id) { it.copy(text = it.text + t) } },
                             approve = { title, details -> askApproval(title, details) },
                         )
@@ -701,7 +772,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 if (useNano) {
                     if (!_ui.value.nanoReady) checkNano().join()
                     if (!_ui.value.nanoReady) throw IllegalStateException("Gemini Nano ist nicht bereit: ${_ui.value.nanoStatus}")
-                    nano.reply(system, history, web).collect { onPiece(it) }
+                    val limit = settings.answerLength.tokens
+                    nano.reply(system, history, web).let { f -> if (limit > 0) f.take(limit) else f }.collect { onPiece(it) }
                 } else withLocal {
                     // Everything must fit into the model's context – too much input closes the whole app natively.
                     val budget = llm.inputBudgetChars - system.length
@@ -720,7 +792,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             "Platz ${llm.inputBudgetChars} Zeichen · Anweisung ${system.length} · Frage ${question.length} · " +
                             "Verlauf ${earlier.size} Nachrichten (${earlier.sumOf { it.text.length }} Zeichen)",
                     )
-                    llm.chat(conv.id, system, earlier, question, last.id, botMsg.id).collect { onPiece(it) }
+                    val limit = settings.answerLength.tokens
+                    llm.chat(conv.id, system, earlier, question, last.id, botMsg.id, settings.creativity.temperature)
+                        .let { f -> if (limit > 0) f.take(limit) else f }.collect { onPiece(it) }
                 }
                 val end = ThinkParser.split(raw.toString(), thinkOpen, finished = true)
                 val now = System.currentTimeMillis()
@@ -882,6 +956,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun buildSystem(letters: Boolean, letter: Boolean, followUpDoc: Boolean, history: List<ChatMessage> = emptyList()): String =
         settings.systemPrompt.trim() // only the user's own text – nothing from the app
+
+    /** Instruction of a chat: the chosen own instruction, else the system instruction – both only the user's own text. */
+    private fun systemFor(instructionId: String): String =
+        settings.instructions.firstOrNull { it.id == instructionId }?.text?.trim() ?: settings.systemPrompt.trim()
 
     /** Text that goes into a PDF: letters without a date line get today's date (safety net, no duplicates). */
     fun pdfText(doc: String): String = DocumentParser.ensureDateLine(doc, today(), place = settings.activeSender?.city)

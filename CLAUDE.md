@@ -18,7 +18,8 @@
 
 ## Design (ab 3.0)
 - Claude wird in der Oberfläche nicht mehr angeboten. Modellwahl (ab 3.2): alle heruntergeladenen `.litertlm`-Modelle + Gemini Nano.
-- Immer das dunkle Fold-KI-Design: Farben/Bausteine in `ui/Theme.kt` (`FK`) und `ui/Design.kt` (Tile, Group, SettingRow, Tag, FkToggle, FkChip, FkButton), Schrift Inter (`res/font`). Neue Bildschirme nur mit diesen Bausteinen bauen, damit alles gleich aussieht.
+- Immer das dunkle Fold-KI-Design (ab 4.0 Apple-Stil: Schwarz, graue Gruppen, Blau als Akzent, grüne Schalter, farbige Symbol-Kacheln mit weißem Symbol, große Seitentitel): Farben/Bausteine in `ui/Theme.kt` (`FK`) und `ui/Design.kt` (Tile, Group, SettingRow, Tag, Pill, LargeTitle, Segmented, Card, FkToggle, FkChip, FkButton), Schrift Inter (`res/font`). Neue Bildschirme nur mit diesen Bausteinen bauen, damit alles gleich aussieht. Entwürfe: 18 Bilder (Chat, Menü, Modelle, Stimmen, Anweisungen, PC-Server, Werkzeuge, S3, Erkunden, Chat-Optionen, PDF, Sprachmodus, Einstellungen, Verlauf, Tagesstart, aufgeklappt).
+- **Menü (ab 4.0):** Seitenleiste = Neuer Chat, Suche, Verlauf, Gemerkte Antworten, Meine Anweisungen, Modelle, Erkunden, Stimmen, Werkzeuge, Einstellungen, letzte Chats, unten das aktive Modell. Seiten öffnen über `SettingsScreen(startPage = …)`. Chat-Optionen (⋮): Inkognito (`Conversation.incognito`, nie gespeichert), Anweisung pro Chat (`Conversation.instruction`, nur selbst geschriebene `Settings.instructions`), Websuche, Kreativität (`Creativity`, Standard = kein Sampler), Länge (`AnswerLength`, Frei = keine Grenze), Gedanken/Statistik ein/aus. Gemerkte Antworten: `SavedStore` (saved.json).
 
 ## Allgemein
 - Antworten und App-Texte auf Deutsch. **Antworten an den Nutzer immer kurz** (Kurzfassung, wenige Sätze, kein Aufsatz).

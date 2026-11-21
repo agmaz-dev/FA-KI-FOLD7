@@ -5,6 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -50,11 +51,35 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.importModel(uri) }
     val busy = st is State.Downloading || st is State.Verifying || st is State.Importing
 
-    Note(
-        "Es antwortet nur das gewählte Modell – kein anderes springt ein. Frei: ${LocalModelManager.gb(free)}" +
-            if (ram > 0) " · Arbeitsspeicher: ${"%.0f".format(java.util.Locale.GERMANY, ram / 1e9)} GB" else "",
-        Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
-    )
+    // Memory card (like the mock-up): free RAM decides whether a model can start.
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val avail = remember(ui.localModels, ui.backend) {
+        runCatching {
+            val am = ctx.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.availMem
+        }.getOrDefault(0L)
+    }
+    Card {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text("Arbeitsspeicher", fontSize = 17.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = FK.Text, modifier = Modifier.weight(1f))
+            val ok = avail > 3_000_000_000L
+            Pill(if (ok) "Gut" else "Knapp", if (ok) FK.Ok else FK.Warn)
+        }
+        if (ram > 0) {
+            Spacer(Modifier.height(10.dp))
+            LinearProgressIndicator(
+                progress = { (1f - avail.toFloat() / ram).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(8.dp),
+                color = FK.Ok, trackColor = FK.Surface3,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row {
+            Text("Frei: ", fontSize = 13.sp, color = FK.Muted)
+            Text(LocalModelManager.gb(avail), fontSize = 13.sp, color = FK.Ok, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            if (ram > 0) Text("${"%.0f".format(java.util.Locale.GERMANY, ram / 1e9)} GB gesamt · Speicher frei ${LocalModelManager.gb(free)}", fontSize = 13.sp, color = FK.Muted)
+        }
+    }
+    Note("Es antwortet nur das gewählte Modell – kein anderes springt ein.", Modifier.padding(horizontal = 6.dp, vertical = 8.dp))
 
     SectionLabel("Gewähltes Modell")
     Group {

@@ -41,7 +41,7 @@ import androidx.compose.ui.unit.sp
 
 /** Rounded icon tile (settings rows, sheets, cards). [tone] = background to symbol colour. */
 @Composable
-fun Tile(icon: ImageVector, tone: Pair<Color, Color>, size: Dp = 36.dp, radius: Dp = 10.dp, iconSize: Dp = 18.dp) {
+fun Tile(icon: ImageVector, tone: Pair<Color, Color>, size: Dp = 30.dp, radius: Dp = 7.dp, iconSize: Dp = 18.dp) {
     Box(Modifier.size(size).clip(RoundedCornerShape(radius)).background(tone.first), contentAlignment = Alignment.Center) {
         Icon(icon, null, tint = tone.second, modifier = Modifier.size(iconSize))
     }
@@ -51,19 +51,19 @@ fun Tile(icon: ImageVector, tone: Pair<Color, Color>, size: Dp = 36.dp, radius: 
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(
-        text.uppercase(), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = FK.Muted, letterSpacing = 0.8.sp,
-        modifier = modifier.padding(start = 6.dp, end = 6.dp, top = 18.dp, bottom = 8.dp),
+        text.uppercase(), fontSize = 13.sp, color = FK.Muted, letterSpacing = 0.3.sp,
+        modifier = modifier.padding(start = 16.dp, end = 16.dp, top = 22.dp, bottom = 7.dp),
     )
 }
 
 /** Rounded block of rows with thin lines between them. */
 @Composable
 fun Group(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
-    Column(modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(FK.Surface), content = content)
+    Column(modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(FK.Surface), content = content)
 }
 
 @Composable
-fun GroupDivider() = HorizontalDivider(thickness = 1.dp, color = FK.Line)
+fun GroupDivider() = HorizontalDivider(Modifier.padding(start = 58.dp), thickness = 0.5.dp, color = FK.Line)
 
 /** One settings row: tile, title, grey line, something on the right. */
 @Composable
@@ -75,16 +75,16 @@ fun SettingRow(
     trailing: @Composable RowScope.() -> Unit = { Chevron() },
 ) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 64.dp)
+        Modifier.fillMaxWidth().heightIn(min = 52.dp)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 14.dp, vertical = 13.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         leading()
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (!subtitle.isNullOrBlank()) Text(subtitle, fontSize = 12.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, fontSize = 16.sp, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (!subtitle.isNullOrBlank()) Text(subtitle, fontSize = 13.sp, color = FK.Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.width(10.dp))
         trailing()
@@ -92,30 +92,68 @@ fun SettingRow(
 }
 
 @Composable
-fun Chevron() = Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = FK.Dim, modifier = Modifier.size(22.dp))
+fun Chevron() = Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = FK.Dim, modifier = Modifier.size(20.dp))
 
 /** Small status label, green when [on] ("bereit"). */
 @Composable
 fun Tag(text: String, on: Boolean = false) {
     Text(
-        text, fontSize = 11.sp, color = if (on) FK.Ok else FK.Muted, maxLines = 1,
+        text, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = if (on) FK.Ok else FK.Muted, maxLines = 1,
         modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(if (on) FK.OkSoft else FK.Surface2)
             .padding(horizontal = 8.dp, vertical = 3.dp),
     )
 }
 
-/** Switch in the Fold KI look (46 × 28, orange when on). [enabled] false = shown but locked. */
+/** Switch in the iOS look (51 × 31, green when on). [enabled] false = shown but locked. */
 @Composable
 fun FkToggle(on: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) {
     Box(
-        Modifier.size(46.dp, 28.dp).clip(RoundedCornerShape(14.dp)).background(if (on) FK.Accent else FK.Line)
+        Modifier.size(51.dp, 31.dp).clip(RoundedCornerShape(16.dp)).background(if (on) FK.Ok else FK.Surface3)
             .clickable(enabled = enabled) { onChange(!on) },
     ) {
-        Box(
-            Modifier.offset(x = if (on) 21.dp else 3.dp, y = 3.dp).size(22.dp).clip(CircleShape)
-                .background(if (on) Color.White else FK.Muted),
-        )
+        Box(Modifier.offset(x = if (on) 22.dp else 2.dp, y = 2.dp).size(27.dp).clip(CircleShape).background(Color.White))
     }
+}
+
+/** Coloured capsule label ("GPU", "Denken", "GGUF"). */
+@Composable
+fun Pill(text: String, color: Color = FK.Accent) {
+    Text(
+        text, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = color, maxLines = 1,
+        modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(color.copy(alpha = 0.18f)).padding(horizontal = 8.dp, vertical = 3.dp),
+    )
+}
+
+/** Large page title (iOS "large title"). */
+@Composable
+fun LargeTitle(text: String, modifier: Modifier = Modifier) {
+    Text(text, fontSize = 32.sp, fontWeight = FontWeight.Bold, color = FK.Text, letterSpacing = (-0.5).sp, maxLines = 2,
+        modifier = modifier.padding(start = 4.dp, top = 4.dp, bottom = 8.dp))
+}
+
+/** Segmented control (two to four options). */
+@Composable
+fun Segmented(options: List<String>, selected: Int, modifier: Modifier = Modifier, onSelect: (Int) -> Unit) {
+    Row(modifier.fillMaxWidth().clip(RoundedCornerShape(9.dp)).background(FK.Surface).padding(2.dp)) {
+        options.forEachIndexed { i, o ->
+            Box(
+                Modifier.weight(1f).clip(RoundedCornerShape(7.dp)).background(if (i == selected) FK.Surface3 else Color.Transparent)
+                    .clickable { onSelect(i) }.padding(vertical = 7.dp),
+                contentAlignment = Alignment.Center,
+            ) { Text(o, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (i == selected) FK.Text else FK.Muted, maxLines = 1) }
+        }
+    }
+}
+
+/** Card with rounded corners (models, memory). [border] e.g. green for the active model. */
+@Composable
+fun Card(modifier: Modifier = Modifier, border: Color? = null, content: @Composable ColumnScope.() -> Unit) {
+    val shape = RoundedCornerShape(16.dp)
+    Column(
+        modifier.fillMaxWidth().clip(shape).background(FK.Surface)
+            .then(if (border != null) Modifier.border(1.5.dp, border, shape) else Modifier).padding(16.dp),
+        content = content,
+    )
 }
 
 /** Status dot (green = ready). */
@@ -146,18 +184,17 @@ fun Spark(size: Dp = 34.dp, color: Color = FK.Accent) {
 @Composable
 fun RoundOutline(onClick: () -> Unit, content: @Composable () -> Unit) {
     Box(
-        Modifier.size(40.dp).clip(CircleShape).border(1.dp, FK.Line, CircleShape).clickable(onClick = onClick),
+        Modifier.size(38.dp).clip(CircleShape).background(FK.Surface2).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { content() }
 }
 
-/** Outlined 36-dp chip (Web, suggestions). */
+/** Filled 36-dp capsule chip (Web, suggestions). */
 @Composable
 fun FkChip(text: String, icon: ImageVector? = null, active: Boolean = false, onClick: () -> Unit) {
     Row(
         Modifier.height(36.dp).clip(RoundedCornerShape(18.dp))
-            .border(1.dp, if (active) FK.Accent else FK.Line, RoundedCornerShape(18.dp))
-            .background(if (active) FK.AccentSoft else Color.Transparent)
+            .background(if (active) FK.AccentSoft else FK.Surface)
             .clickable(onClick = onClick).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -178,16 +215,16 @@ fun Avatar(initials: String, size: Dp = 34.dp) {
 /** Grey explanatory text. */
 @Composable
 fun Note(text: String, modifier: Modifier = Modifier) {
-    Text(text, fontSize = 12.sp, color = FK.Muted, lineHeight = 18.sp, modifier = modifier)
+    Text(text, fontSize = 13.sp, color = FK.Muted, lineHeight = 18.sp, modifier = modifier)
 }
 
 /** Full-width orange (or outlined) 48-dp button. */
 @Composable
 fun FkButton(text: String, modifier: Modifier = Modifier, ghost: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
     Box(
-        modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(24.dp))
-            .then(if (ghost) Modifier.border(1.dp, FK.Line, RoundedCornerShape(24.dp)) else Modifier.background(if (enabled) FK.Accent else FK.Line))
+        modifier.fillMaxWidth().height(50.dp).clip(RoundedCornerShape(14.dp))
+            .background(if (ghost) FK.Surface2 else if (enabled) FK.Accent else FK.Surface2)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) { Text(text, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = if (ghost) FK.Text else FK.OnAccent) }
+    ) { Text(text, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = if (ghost) FK.Accent else if (enabled) FK.OnAccent else FK.Dim) }
 }
