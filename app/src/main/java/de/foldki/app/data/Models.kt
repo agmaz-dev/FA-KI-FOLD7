@@ -51,6 +51,8 @@ data class ChatMessage(
     val backend: String = "",
     /** Average CPU load of the app while answering (%), -1 = not measured. */
     val cpuPct: Int = -1,
+    /** How long the model thought before answering (ms), 0 = no thoughts. */
+    val thinkMs: Long = 0,
 )
 
 data class Conversation(

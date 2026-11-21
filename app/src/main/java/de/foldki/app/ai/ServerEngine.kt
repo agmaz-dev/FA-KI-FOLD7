@@ -84,6 +84,33 @@ object ServerEngine {
         } finally { c.disconnect() }
     }
 
+    /** Best effort: "GGUF · Q4_K_M" per model name (LM Studio /api/v0/models, Ollama /api/tags); empty if unknown. */
+    suspend fun modelInfo(s: PcServer): Map<String, String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val url = if (s.type == "ollama") s.base + "/api/tags" else s.base + "/api/v0/models"
+            val c = open(url, s).apply { readTimeout = 6000 }
+            try {
+                if (c.responseCode !in 200..299) return@runCatching emptyMap()
+                val o = JSONObject(c.inputStream.bufferedReader().readText())
+                val out = HashMap<String, String>()
+                if (s.type == "ollama") {
+                    val a = o.optJSONArray("models") ?: JSONArray()
+                    for (i in 0 until a.length()) {
+                        val m = a.getJSONObject(i); val d = m.optJSONObject("details")
+                        out[m.optString("name")] = listOfNotNull(d?.optString("format")?.uppercase()?.ifBlank { null }, d?.optString("quantization_level")?.ifBlank { null }).joinToString(" · ")
+                    }
+                } else {
+                    val a = o.optJSONArray("data") ?: JSONArray()
+                    for (i in 0 until a.length()) {
+                        val m = a.getJSONObject(i)
+                        out[m.optString("id")] = listOfNotNull(m.optString("compatibility_type").uppercase().ifBlank { null }, m.optString("quantization").ifBlank { null }).joinToString(" · ")
+                    }
+                }
+                out
+            } finally { c.disconnect() }
+        }.getOrDefault(emptyMap())
+    }
+
     /**
      * Streams the answer. Reasoning sent separately by the server ("reasoning_content") is wrapped in <think>…</think>,
      * so it shows up as "Gedanken" like with the models on the phone.

@@ -51,10 +51,10 @@ fun Tile(icon: ImageVector, tone: Pair<Color, Color>, size: Dp = 30.dp, radius: 
 
 /** Grey upper-case section title above a group. */
 @Composable
-fun SectionLabel(text: String, modifier: Modifier = Modifier) {
+fun SectionLabel(text: String, modifier: Modifier = Modifier, top: Dp = 18.dp) {
     Text(
         text.uppercase(), fontSize = 13.sp, color = FK.Muted, letterSpacing = 0.3.sp,
-        modifier = modifier.padding(start = 16.dp, end = 16.dp, top = 22.dp, bottom = 7.dp),
+        modifier = modifier.padding(start = 20.dp, end = 20.dp, top = top, bottom = 7.dp),
     )
 }
 
@@ -65,36 +65,39 @@ fun Group(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> 
 }
 
 @Composable
-fun GroupDivider() = HorizontalDivider(Modifier.padding(start = 58.dp), thickness = 0.5.dp, color = FK.Line)
+fun GroupDivider() = HorizontalDivider(Modifier.padding(start = 60.dp), thickness = 0.5.dp, color = FK.Line)
 
 /** One settings row: tile, title, grey line, something on the right. */
 @Composable
 fun SettingRow(
     title: String,
     subtitle: String? = null,
-    leading: @Composable () -> Unit,
+    leading: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
     trailing: @Composable RowScope.() -> Unit = { Chevron() },
 ) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 52.dp)
+        Modifier.fillMaxWidth().heightIn(min = 48.dp)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        leading()
-        Spacer(Modifier.width(14.dp))
+        if (leading != null) { leading(); Spacer(Modifier.width(12.dp)) }
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 16.sp, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (!subtitle.isNullOrBlank()) Text(subtitle, fontSize = 13.sp, color = FK.Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
-        Spacer(Modifier.width(10.dp))
+        Spacer(Modifier.width(12.dp))
         trailing()
     }
 }
 
 @Composable
-fun Chevron() = Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = FK.Dim, modifier = Modifier.size(20.dp))
+fun Chevron() = Text("›", fontSize = 18.sp, color = FK.Dim)
+
+/** Grey value on the right of a row ("leer", "GPU", "75 %"). */
+@Composable
+fun RowValue(text: String) = Text(text, fontSize = 15.sp, color = FK.Muted, maxLines = 1)
 
 /** Small status label, green when [on] ("bereit"). */
 @Composable
@@ -120,17 +123,82 @@ fun FkToggle(on: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true) 
 /** Coloured capsule label ("GPU", "Denken", "GGUF"). */
 @Composable
 fun Pill(text: String, color: Color = FK.Accent) {
+    // Grey pill = grey background with grey text (like ".p-gray" of the mock-ups); others = tinted background.
+    val gray = color == FK.Muted
+    val bg = if (gray) FK.Surface2 else color.copy(alpha = if (color == FK.Ok || color == FK.Warn) 0.16f else 0.18f)
     Text(
         text, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = color, maxLines = 1,
-        modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(color.copy(alpha = 0.18f)).padding(horizontal = 8.dp, vertical = 3.dp),
+        modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(bg).padding(horizontal = 8.dp, vertical = 3.dp),
+    )
+}
+
+/** Grey text under the large title (".sub" of the mock-ups). */
+@Composable
+fun Sub(text: String) {
+    Text(text, fontSize = 15.sp, color = FK.Muted, lineHeight = 20.sp, modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 14.dp))
+}
+
+/** Small capsule button (".cta"): blue, or grey with blue text when [ghost]. */
+@Composable
+fun Cta(text: String, ghost: Boolean = false, enabled: Boolean = true, color: Color = FK.Accent, onClick: () -> Unit) {
+    Text(
+        text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+        color = if (!enabled) FK.Dim else if (ghost) color else Color.White,
+        modifier = Modifier.clip(RoundedCornerShape(20.dp)).background(if (ghost || !enabled) FK.Surface2 else color)
+            .clickable(enabled = enabled, onClick = onClick).padding(horizontal = 16.dp, vertical = 7.dp),
+    )
+}
+
+/** Round 36-dp button of the top bar (menu, back, close, new chat). */
+@Composable
+fun NavBtn(icon: ImageVector, label: String, bg: Color = FK.Surface, tint: Color = FK.Text, onClick: () -> Unit) {
+    Box(Modifier.size(36.dp).clip(CircleShape).background(bg).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Icon(icon, label, tint = tint, modifier = Modifier.size(20.dp))
+    }
+}
+
+/** Input row of a group: label left, value right (grey hint when empty), like ".field" of the mock-ups. */
+@Composable
+fun FieldRow(label: String, value: String, onChange: (String) -> Unit, hint: String = "", password: Boolean = false, number: Boolean = false) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, fontSize = 16.sp, color = FK.Text)
+        Spacer(Modifier.width(12.dp))
+        Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+            if (value.isEmpty()) Text(hint, fontSize = 16.sp, color = FK.Dim, maxLines = 1)
+            androidx.compose.foundation.text.BasicTextField(
+                value, onChange, singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(fontFamily = Inter, fontSize = 16.sp, color = FK.Muted, textAlign = androidx.compose.ui.text.style.TextAlign.End),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(FK.Accent),
+                visualTransformation = if (password) androidx.compose.ui.text.input.PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+                keyboardOptions = if (number) androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
+                    else androidx.compose.foundation.text.KeyboardOptions.Default,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/** Divider between [FieldRow]s (full width, like ".field+.field"). */
+@Composable
+fun FieldDivider() = HorizontalDivider(thickness = 0.5.dp, color = FK.Line)
+
+/** iOS-like slider: blue track, white round thumb. [steps] = number of stops between the ends. */
+@Composable
+fun FkSlider(value: Float, onChange: (Float) -> Unit, range: ClosedFloatingPointRange<Float> = 0f..1f, steps: Int = 0, onDone: () -> Unit = {}) {
+    androidx.compose.material3.Slider(
+        value = value, onValueChange = onChange, valueRange = range, steps = steps, onValueChangeFinished = onDone,
+        colors = androidx.compose.material3.SliderDefaults.colors(
+            thumbColor = Color.White, activeTrackColor = FK.Accent, inactiveTrackColor = FK.Surface3,
+            activeTickColor = Color.Transparent, inactiveTickColor = Color.Transparent,
+        ),
     )
 }
 
 /** Large page title (iOS "large title"). */
 @Composable
 fun LargeTitle(text: String, modifier: Modifier = Modifier) {
-    Text(text, fontSize = 32.sp, fontWeight = FontWeight.Bold, color = FK.Text, letterSpacing = (-0.5).sp, maxLines = 2,
-        modifier = modifier.padding(start = 4.dp, top = 4.dp, bottom = 8.dp))
+    Text(text, fontSize = 34.sp, fontWeight = FontWeight.Bold, color = FK.Text, letterSpacing = (-0.5).sp, maxLines = 2, lineHeight = 40.sp,
+        modifier = modifier.padding(start = 4.dp, top = 6.dp, bottom = 10.dp))
 }
 
 /** Segmented control (two to four options). */
@@ -151,10 +219,10 @@ fun Segmented(options: List<String>, selected: Int, modifier: Modifier = Modifie
 @Composable
 fun SearchBox(value: String, onChange: (String) -> Unit, hint: String, modifier: Modifier = Modifier) {
     Row(
-        modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(10.dp)).background(FK.Surface).padding(horizontal = 12.dp),
+        modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(FK.Surface).padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(androidx.compose.material.icons.Icons.Default.Search, null, tint = FK.Dim, modifier = Modifier.size(18.dp))
+        Text("🔍", fontSize = 15.sp)
         Spacer(Modifier.width(8.dp))
         Box(Modifier.weight(1f)) {
             if (value.isEmpty()) Text(hint, color = FK.Dim, fontSize = 16.sp, maxLines = 1)
@@ -226,7 +294,7 @@ fun Spark(size: Dp = 34.dp, color: Color = FK.Accent) {
 @Composable
 fun RoundOutline(onClick: () -> Unit, content: @Composable () -> Unit) {
     Box(
-        Modifier.size(38.dp).clip(CircleShape).background(FK.Surface2).clickable(onClick = onClick),
+        Modifier.size(36.dp).clip(CircleShape).background(FK.Surface2).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { content() }
 }

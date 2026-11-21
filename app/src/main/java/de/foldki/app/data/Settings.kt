@@ -80,6 +80,48 @@ class Settings(context: Context) {
         get() = de.foldki.app.ai.PcServer.listFromJson(prefs.getString("pc_servers", "[]"))
         set(v) = prefs.edit().putString("pc_servers", de.foldki.app.ai.PcServer.listToJson(v)).apply()
 
+    // ---- S3-Sicherung (own S3 storage, end-to-end encrypted) ----
+    var s3Endpoint: String
+        get() = prefs.getString("s3_endpoint", "https://s3.amazonaws.com") ?: "https://s3.amazonaws.com"
+        set(v) = prefs.edit().putString("s3_endpoint", v).apply()
+    var s3Bucket: String
+        get() = prefs.getString("s3_bucket", "") ?: ""
+        set(v) = prefs.edit().putString("s3_bucket", v).apply()
+    var s3Region: String
+        get() = prefs.getString("s3_region", "eu-central-1") ?: "eu-central-1"
+        set(v) = prefs.edit().putString("s3_region", v).apply()
+    var s3Prefix: String
+        get() = prefs.getString("s3_prefix", "foldki") ?: "foldki"
+        set(v) = prefs.edit().putString("s3_prefix", v).apply()
+    var s3AccessKey: String
+        get() = prefs.getString("s3_access", "") ?: ""
+        set(v) = prefs.edit().putString("s3_access", v).apply()
+    var s3SecretKey: String
+        get() = prefs.getString("s3_secret", "") ?: ""
+        set(v) = prefs.edit().putString("s3_secret", v).apply()
+    var s3Password: String
+        get() = prefs.getString("s3_password", "") ?: ""
+        set(v) = prefs.edit().putString("s3_password", v).apply()
+    var s3Auto: Boolean
+        get() = prefs.getBoolean("s3_auto", false)
+        set(v) = prefs.edit().putBoolean("s3_auto", v).apply()
+    var s3Last: Long
+        get() = prefs.getLong("s3_last", 0L)
+        set(v) = prefs.edit().putLong("s3_last", v).apply()
+
+    /** "Antworten automatisch vorlesen" (page Stimmen). */
+    var autoSpeak: Boolean
+        get() = prefs.getBoolean("auto_speak", false)
+        set(v) = prefs.edit().putBoolean("auto_speak", v).apply()
+
+    /** Werkzeuge: GitHub tools and letters/PDF on or off. */
+    var githubEnabled: Boolean
+        get() = prefs.getBoolean("github_enabled", true)
+        set(v) = prefs.edit().putBoolean("github_enabled", v).apply()
+    var pdfEnabled: Boolean
+        get() = prefs.getBoolean("pdf_enabled", true)
+        set(v) = prefs.edit().putBoolean("pdf_enabled", v).apply()
+
     var showStats: Boolean
         get() = prefs.getBoolean("show_stats", true)
         set(v) = prefs.edit().putBoolean("show_stats", v).apply()

@@ -42,6 +42,9 @@ object FK {
     val T6 = Color(0xFF636366) to Color.White
     val T7 = Color(0xFF5E5CE6) to Color.White
     val T8 = Color(0xFF30B0C7) to Color.White
+    val T9 = Color(0xFF24292F) to Color.White
+    val T10 = Color(0xFF8E8E93) to Color.White
+    val T11 = Color(0xFF3A3A3C) to Color.White
 }
 
 val Accent = FK.Accent

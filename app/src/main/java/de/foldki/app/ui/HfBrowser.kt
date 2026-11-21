@@ -82,32 +82,36 @@ private val WARN = Color(0xFFE8C07A)
 fun HfBrowser(vm: ChatViewModel, ui: UiState, onDone: () -> Unit) {
     var web by rememberSaveable { mutableStateOf(false) }
     var detail by rememberSaveable { mutableStateOf<String?>(null) }
-    Column(Modifier.fillMaxSize()) {
-        // Like the mock-up: one button to the real web page (and back), the search is the normal view.
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), horizontalArrangement = Arrangement.End) {
-            Text(
-                if (web) "‹ Zurück zur Suche" else "huggingface.co ↗", color = FK.Accent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clip(RoundedCornerShape(18.dp)).background(FK.Surface2).clickable { web = !web }.padding(horizontal = 14.dp, vertical = 8.dp),
-            )
-        }
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (web) WebMode(vm, onOpen = { repo -> detail = repo; web = false })
-            else SearchMode(vm, ui, detail, onDetail = { detail = it })
-        }
+    // Top bar like mock-up 9: "huggingface.co" on the right; on the web page ‹ goes back to the search.
+    if (web) PageBack({ web = false }, hideTitle = true)
+    else PageAction { Cta("huggingface.co", ghost = true) { web = true } }
+    Box(Modifier.fillMaxSize()) {
+        if (web) WebMode(vm, onOpen = { repo -> detail = repo; web = false })
+        else SearchMode(vm, ui, detail, onDetail = { detail = it })
     }
 }
 
 // ---------------------------------------------------------------- Suche
 
+private val FILTERS = listOf("Beliebt", "Neu", "Klein", "Denken", "Bilder")
+
+/** Small model: at most 2 B parameters (from the name). */
+private fun small(r: HfModels.Repo): Boolean {
+    val p = r.parameter
+    val n = p.dropLast(1).toDoubleOrNull() ?: return false
+    return if (p.endsWith("M")) true else n <= 2.0
+}
+
 @Composable
 private fun SearchMode(vm: ChatViewModel, ui: UiState, detail: String?, onDetail: (String?) -> Unit) {
     var query by rememberSaveable { mutableStateOf("") }
-    var sort by rememberSaveable { mutableStateOf("downloads") }
+    var filter by rememberSaveable { mutableIntStateOf(0) }
     var repos by remember { mutableStateOf<List<HfModels.Repo>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
     // 0 = LiteRT (litert-community, GPU), 1 = GGUF (llama.cpp, also LM Studio files; searched on the server)
     var fmt by rememberSaveable { mutableIntStateOf(0) }
+    val sort = if (filter == 1) "lastModified" else "downloads"
     LaunchedEffect(sort, reload, fmt, if (fmt == 1) query else "") {
         if (fmt == 1) kotlinx.coroutines.delay(400)
         error = null; repos = null
@@ -119,35 +123,35 @@ private fun SearchMode(vm: ChatViewModel, ui: UiState, detail: String?, onDetail
         val wide = maxWidth >= 600.dp
         val list: @Composable (Modifier) -> Unit = { mod ->
             Column(mod) {
-                SearchBox(query, { query = it }, "Modelle suchen", Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp))
-                Segmented(listOf("LiteRT · GPU", "GGUF"), fmt, Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) { fmt = it }
-                Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    HfModels.SORTS.forEach { (k, label) -> FkChip(label, active = sort == k) { sort = k } }
+                SearchBox(query, { query = it }, "Modelle suchen", Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp))
+                Segmented(listOf("LiteRT · GPU", "GGUF"), fmt, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)) { fmt = it }
+                Row(Modifier.horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FILTERS.forEachIndexed { i, label -> FkChip(label, active = filter == i) { filter = i } }
                 }
                 val all = repos
                 when {
-                    error != null -> Column(Modifier.padding(18.dp)) {
-                        Text("Liste konnte nicht geladen werden: $error", color = ERR, fontSize = 13.sp)
+                    error != null -> Column(Modifier.padding(horizontal = 16.dp)) {
+                        Text("Liste konnte nicht geladen werden: $error", color = ERR, fontSize = 14.sp)
                         Spacer(Modifier.height(10.dp))
-                        FkButton("Erneut versuchen", ghost = true) { reload++ }
+                        Cta("Erneut versuchen", ghost = true) { reload++ }
                     }
                     all == null -> Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = FK.Accent) }
                     else -> {
                         val q = query.trim().lowercase()
-                        val shown = if (q.isEmpty() || fmt == 1) all else all.filter { it.name.lowercase().contains(q) }
-                        Note(
-                            if (fmt == 1) "${shown.size} GGUF-Modelle · llama.cpp" else "${shown.size} Modelle · litert-community",
-                            Modifier.padding(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 6.dp),
-                        )
+                        val shown = all.filter { r ->
+                            (q.isEmpty() || fmt == 1 || r.name.lowercase().contains(q)) && when (filter) {
+                                2 -> small(r); 3 -> "Denken" in r.features; 4 -> "Bilder" in r.features; else -> true
+                            }
+                        }
                         LazyVerticalGrid(
                             columns = GridCells.Adaptive(160.dp),
                             modifier = Modifier.weight(1f).fillMaxWidth(),
-                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 30.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             items(shown, key = { it.id }) { r ->
-                                RepoCard(r, have = r.usableFiles.any { it.substringAfterLast('/') in installed }, active = r.id == detail) { onDetail(r.id) }
+                                RepoCard(r, have = r.usableFiles.any { it.substringAfterLast('/') in installed }, active = wide && r.id == detail) { onDetail(r.id) }
                             }
                         }
                     }
@@ -159,13 +163,15 @@ private fun SearchMode(vm: ChatViewModel, ui: UiState, detail: String?, onDetail
             VerticalDivider(color = FK.Line)
             Box(Modifier.weight(1.2f).fillMaxHeight()) {
                 if (detail != null) Detail(vm, ui, detail, onClose = null)
-                else Note("Wähle links ein Modell, um Größen, Funktionen und Beschreibung zu sehen.", Modifier.padding(24.dp))
+                else Sub("Wähle links ein Modell.")
             }
         } else {
             list(Modifier.fillMaxSize())
-            if (detail != null) Box(Modifier.fillMaxSize().background(FK.Bg)) { Detail(vm, ui, detail, onClose = { onDetail(null) }) }
+            if (detail != null) {
+                PageBack({ onDetail(null) }, hideTitle = true)
+                Box(Modifier.fillMaxSize().background(FK.Bg)) { Detail(vm, ui, detail, onClose = { onDetail(null) }) }
+            }
         }
-        if (!wide && detail != null) BackHandler { onDetail(null) }
     }
 }
 
@@ -178,32 +184,33 @@ private fun RepoCard(r: HfModels.Repo, have: Boolean, active: Boolean, onClick: 
             .then(if (active) Modifier.border(1.5.dp, FK.Accent, shape) else Modifier).clickable(onClick = onClick).padding(14.dp),
     ) {
         ModelLogo(HfModels.vendorOf(r.id), 36.dp)
-        Spacer(Modifier.height(10.dp))
-        Text(HfModels.prettyName(r.name), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = FK.Text, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(
-            HfModels.vendorOf(r.id) + " · " + fmtNum(r.downloads) + " Downloads",
-            fontSize = 12.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
+        Text(HfModels.prettyName(r.name), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = FK.Text, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
+        Text(HfModels.vendorOf(r.id) + " · " + fmtNum(r.downloads) + " Downloads", fontSize = 12.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         androidx.compose.foundation.layout.FlowRow(
             Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             if (have) Pill("Installiert", FK.Ok)
-            if (r.usableFiles.any { HfModels.isGpuFile(it) } || (r.official && r.name.lowercase().startsWith("gemma"))) Pill("GPU", FK.Accent)
+            if (gpuRepo(r)) Pill("GPU", FK.Accent)
             if (r.usableFiles.any { HfModels.isGguf(it) }) Pill("GGUF", FK.Warn)
             r.features.forEach { f -> Pill(f, if (f == "Denken") FK.Purple else FK.Muted) }
-            if (r.parameter.isNotEmpty()) Pill(r.parameter, FK.Muted)
         }
     }
 }
 
+private fun gpuRepo(r: HfModels.Repo): Boolean =
+    r.usableFiles.any { HfModels.isGpuFile(it) } || (r.official && r.name.lowercase().startsWith("gemma") && r.usableFiles.isNotEmpty())
+
 // ---------------------------------------------------------------- Detail
 
+/** Detail page exactly like mock-up 10: logo + title, pills, numbers, files with "Laden", about the model. */
 @Composable
 private fun Detail(vm: ChatViewModel, ui: UiState, id: String, onClose: (() -> Unit)?) {
     var repo by remember(id) { mutableStateOf<HfModels.Repo?>(null) }
     var files by remember(id) { mutableStateOf<List<HfModels.LmFile>?>(null) }
     var readme by remember(id) { mutableStateOf<String?>(null) }
     var error by remember(id) { mutableStateOf<String?>(null) }
+    var more by remember(id) { mutableStateOf(false) }
     var big by remember { mutableStateOf<HfModels.LmFile?>(null) }
     val ram = remember { vm.models.totalRam() }
     LaunchedEffect(id) {
@@ -214,101 +221,96 @@ private fun Detail(vm: ChatViewModel, ui: UiState, id: String, onClose: (() -> U
     }
     val installed = ui.localModels.map { it.file }.toSet()
     val start: (HfModels.LmFile) -> Unit = { f -> if (HfModels.tooBigFor(ram, f.size)) big = f else vm.downloadModel(f) }
+    val name = id.substringAfter('/')
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 8.dp)) {
-        if (onClose != null) Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück zur Liste", tint = FK.Text) }
-            Text("Zurück zur Liste", fontSize = 13.sp, color = FK.Muted)
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 30.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp, top = 10.dp, bottom = 6.dp)) {
             ModelLogo(HfModels.vendorOf(id), 60.dp)
             Spacer(Modifier.width(14.dp))
             Column {
-                Text(HfModels.prettyName(id.substringAfter('/')), fontSize = 26.sp, fontWeight = FontWeight.Bold, color = FK.Text, lineHeight = 30.sp)
+                Text(HfModels.prettyName(name), fontSize = 26.sp, fontWeight = FontWeight.Bold, color = FK.Text, lineHeight = 30.sp)
                 Text(HfModels.vendorOf(id) + " · " + id.substringBefore('/'), fontSize = 13.sp, color = FK.Muted)
             }
         }
         val r = repo
-        if (error != null) { Spacer(Modifier.height(12.dp)); Text("Details nicht ladbar: $error", color = ERR, fontSize = 13.sp); return@Column }
+        if (error != null) { Sub("Details nicht ladbar: $error"); return@Column }
         if (r == null) { Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = FK.Accent) }; return@Column }
-
-        Row(Modifier.padding(top = 12.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            r.features.forEach { f -> Pill(f, if (f == "Denken") FK.Purple else FK.Muted) }
-        }
-        Row(Modifier.padding(top = 12.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(FK.Surface).padding(vertical = 12.dp)) {
-            Stat("Downloads", fmtNum(r.downloads), Modifier.weight(1f))
-            Stat("Parameter", r.parameter.ifEmpty { "–" }, Modifier.weight(1f))
-            Stat("Aktualisiert", ago(r.updated).ifEmpty { "–" }, Modifier.weight(1f))
-        }
-        if (!r.official) Text(
-            "Nicht von Google (litert-community) umgewandelt – läuft in der App vielleicht nicht.",
-            color = WARN, fontSize = 13.sp, modifier = Modifier.padding(top = 10.dp),
-        )
-
-        SectionLabel("Dateien")
-        when (val st = ui.modelOp) {
-            is LocalModelManager.State.Downloading -> {
-                Text("Lädt ${HfModels.displayName(st.name)}… ${st.pct} %", fontSize = 13.sp, color = FK.Text)
-                LinearProgressIndicator(progress = { st.pct / 100f }, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), color = FK.Accent, trackColor = FK.Line)
-            }
-            is LocalModelManager.State.Verifying -> Text("Prüfe ${HfModels.displayName(st.name)}… ${st.pct} %", fontSize = 13.sp, color = FK.Text)
-            is LocalModelManager.State.Failed -> Text(st.message, fontSize = 13.sp, color = ERR)
-            else -> Unit
-        }
         val all = files.orEmpty()
         val usable = all.filter { it.usable }
         val rec = HfModels.recommend(usable)
-        if (usable.isEmpty()) Note(
-            if (all.isEmpty()) "In diesem Repo liegen keine Modelldateien. Fold KI lädt nur .litertlm-Dateien (LiteRT-LM)."
-            else "Keine passende .litertlm-Datei – die Dateien hier sind für andere Programme (z. B. .task, .tflite, .gguf oder Webbrowser).",
-            Modifier.padding(vertical = 6.dp),
-        )
-        Group {
-            all.forEachIndexed { i, f ->
-                if (i > 0) GroupDivider()
-                Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    Text(f.fileName, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = if (f.usable) FK.Text else FK.Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Row(Modifier.padding(top = 6.dp).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(LocalModelManager.gb(f.size), fontSize = 12.sp, color = FK.Muted)
-                        if (f.bits.isNotEmpty()) Pill(f.bits, FK.Muted)
-                        if (f.usable && f.forGpu) Pill("GPU", FK.Accent)
-                        else if (f.usable && usable.any { it.forGpu }) Text("für Prozessor gebaut", fontSize = 11.sp, color = WARN)
-                        if (f.usable) {
-                            val (fit, level) = HfModels.fitText(ram, f.size)
-                            if (fit.isNotEmpty()) Text(fit, fontSize = 11.sp, color = when (level) { 1 -> FK.Ok; 2 -> WARN; else -> ERR })
+
+        Row(Modifier.padding(start = 4.dp, top = 4.dp, bottom = 14.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (usable.any { it.forGpu } || gpuRepo(r)) Pill("GPU", FK.Accent)
+            if (usable.any { HfModels.isGguf(it.fileName) }) Pill("GGUF", FK.Warn)
+            r.features.forEach { f -> Pill(f, if (f == "Denken") FK.Purple else FK.Muted) }
+        }
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(FK.Surface).padding(vertical = 12.dp, horizontal = 6.dp)) {
+            Stat("Downloads", fmtNum(r.downloads), Modifier.weight(1f))
+            Stat("Parameter", r.parameter.ifEmpty { "–" }, Modifier.weight(1f))
+            val ctx = rec?.let { if (HfModels.isGguf(it.fileName)) de.foldki.app.ai.GgufEngine.N_CTX else de.foldki.app.ai.LocalEngine.contextFor(it.fileName) }
+            Stat("Kontext", ctx?.toString() ?: "–", Modifier.weight(1f))
+        }
+
+        SectionLabel("Dateien")
+        when (val st = ui.modelOp) {
+            is LocalModelManager.State.Downloading -> Card(Modifier.padding(bottom = 10.dp)) {
+                Text("Lädt ${HfModels.displayName(st.name)} … ${st.pct} %", fontSize = 15.sp, color = FK.Text)
+                LinearProgressIndicator(progress = { st.pct / 100f }, modifier = Modifier.fillMaxWidth().padding(top = 10.dp), color = FK.Accent, trackColor = FK.Surface3)
+            }
+            is LocalModelManager.State.Verifying -> Card(Modifier.padding(bottom = 10.dp)) { Text("Prüfe ${HfModels.displayName(st.name)} … ${st.pct} %", fontSize = 15.sp, color = FK.Text) }
+            is LocalModelManager.State.Failed -> Card(Modifier.padding(bottom = 10.dp)) { Text(st.message, fontSize = 14.sp, color = ERR) }
+            else -> Unit
+        }
+        if (usable.isEmpty()) Sub("In diesem Repo liegt keine Datei, die Fold KI laden kann (.litertlm oder einzelne .gguf).")
+        else Group {
+            usable.forEachIndexed { i, f ->
+                if (i > 0) androidx.compose.material3.HorizontalDivider(Modifier.padding(start = 16.dp), thickness = 0.5.dp, color = FK.Line)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(shortFile(name, f.fileName), fontSize = 15.sp, fontWeight = FontWeight.Medium, color = FK.Text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        val (fit, level) = HfModels.fitText(ram, f.size)
+                        Row {
+                            Text(listOf(LocalModelManager.gb(f.size), f.bits).filter { it.isNotEmpty() }.joinToString(" · ") + if (fit.isNotEmpty()) " · " else "",
+                                fontSize = 13.sp, color = FK.Muted)
+                            if (fit.isNotEmpty()) Text(if (level == 1) "passt aufs Handy" else if (level == 2) "knapp" else "zu groß", fontSize = 13.sp,
+                                color = when (level) { 1 -> FK.Ok; 2 -> FK.Warn; else -> ERR })
+                        }
+                        Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (f.forGpu) Pill("GPU", FK.Accent)
+                            else if (!HfModels.isGguf(f.fileName) && usable.any { it.forGpu }) Pill("nur Prozessor", FK.Muted)
                             if (f == rec) Pill("Empfohlen", FK.Ok)
-                        } else Text("anderes Format – geht nicht", fontSize = 11.sp, color = FK.Muted)
+                        }
                     }
-                    if (f.usable) Box(Modifier.padding(top = 8.dp)) {
-                        if (f.fileName in installed) Tag("Installiert", on = true)
-                        else FkButton("Laden", ghost = f != rec, enabled = !vm.models.busy) { start(f) }
-                    }
+                    Spacer(Modifier.width(12.dp))
+                    if (f.fileName in installed) Pill("Installiert", FK.Ok)
+                    else Cta("Laden", ghost = f != rec, enabled = !vm.models.busy) { start(f) }
                 }
             }
         }
 
-        SectionLabel("Details")
-        Group {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (r.parameter.isNotEmpty()) KV("Parameter") { Tag(r.parameter) }
-                KV("Format") { Tag(if (usable.isNotEmpty()) "LiteRT-LM (.litertlm)" else "kein .litertlm") }
-                if (r.pipeline.isNotEmpty()) KV("Art") { Tag(r.pipeline) }
-                KV("Funktionen") {
-                    if (r.features.isEmpty()) Text("–", fontSize = 13.sp, color = FK.Muted) else r.features.forEach { Tag(it) }
+        SectionLabel("Über das Modell")
+        Card {
+            when (val md = readme) {
+                null -> Text("Lädt …", fontSize = 14.sp, color = FK.Muted)
+                "" -> Text("Keine Beschreibung vorhanden.", fontSize = 14.sp, color = FK.Muted)
+                else -> {
+                    val plain = remember(md) { md.replace(Regex("[#*`>|_]+"), "").replace(Regex("\\[(.*?)\\]\\(.*?\\)"), "$1").replace(Regex("\\n{3,}"), "\n\n").trim() }
+                    SelectionContainer { Text(if (more) plain else plain.take(280) + if (plain.length > 280) " …" else "", fontSize = 14.sp, lineHeight = 20.sp, color = FK.Muted) }
+                    if (plain.length > 280) Text(if (more) "Weniger" else "Mehr lesen", color = FK.Accent, fontSize = 14.sp,
+                        modifier = Modifier.padding(top = 8.dp).clickable { more = !more })
                 }
-                Note("Funktionen sind nur aus den Schlagworten geschätzt. Fold KI gibt den Modellen bisher keine Bilder und – außer GitHub – keine Werkzeuge.")
             }
         }
-
-        SectionLabel("Beschreibung")
-        when (val md = readme) {
-            null -> Note("Lädt …")
-            "" -> Note("Keine Beschreibung vorhanden.")
-            else -> Group { SelectionContainer { Text(md, fontSize = 12.sp, lineHeight = 18.sp, color = FK.Muted, modifier = Modifier.padding(14.dp)) } }
-        }
-        Spacer(Modifier.height(24.dp))
     }
     big?.let { f -> BigModelWarning(f, ram, onDismiss = { big = null }) { big = null; vm.downloadModel(f) } }
+}
+
+/** "Qwen3.5-4B_mixed_int4_gpu_composite.litertlm" in repo "Qwen3.5-4B" → "mixed_int4_gpu_composite". */
+private fun shortFile(repoName: String, file: String): String {
+    var f = file.removeSuffix(HfModels.EXT).removeSuffix(HfModels.GGUF)
+    val base = repoName.removeSuffix("-GGUF").removeSuffix("-gguf").removeSuffix("-litert-lm")
+    if (f.startsWith(base, ignoreCase = true)) f = f.substring(base.length).trimStart('_', '-', '.')
+    return f.ifBlank { file }
 }
 
 @Composable

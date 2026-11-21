@@ -67,6 +67,8 @@ data class UiState(
     val showStats: Boolean = true,
     /** Instruction id for a new chat. */
     val newInstruction: String = "",
+    val pdfEnabled: Boolean = true,
+    val autoSpeak: Boolean = false,
     /** PC-Server (LM Studio / Ollama). */
     val servers: List<de.foldki.app.ai.PcServer> = emptyList(),
 ) {
@@ -205,6 +207,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             showStats = settings.showStats,
             newInstruction = settings.defaultInstruction,
             servers = settings.servers,
+            pdfEnabled = settings.pdfEnabled,
+            autoSpeak = settings.autoSpeak,
             conversations = store.load(),
             githubSet = settings.githubToken.isNotBlank(),
             webSearch = settings.webSearch,
@@ -299,7 +303,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun removeMemory(index: Int) { memory.remove(index); _memories.value = memory.all() }
 
     /** App in the background or memory is low: free the model's memory (it loads again on the next question). */
-    fun onBackground() { if (!llmGenerating) { freeModels(); _ui.update { it.copy(backend = "") } } }
+    fun onBackground() {
+        if (!llmGenerating) { freeModels(); _ui.update { it.copy(backend = "") } }
+        // "Automatisch sichern": when the app goes to the background, at most every 30 minutes.
+        if (settings.s3Auto && System.currentTimeMillis() - settings.s3Last > 30 * 60_000L) s3BackupNow(quiet = true)
+    }
 
     /** Android is short of memory (app in the background): also free the speech recognition model. */
     fun onLowMemory() { voice.trimMemory() }
@@ -688,6 +696,38 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun setAnswerLength(l: de.foldki.app.data.AnswerLength) { settings.answerLength = l; _ui.update { it.copy(answerLength = l) } }
     fun setShowThoughts(on: Boolean) { settings.showThoughts = on; _ui.update { it.copy(showThoughts = on) } }
     fun setShowStats(on: Boolean) { settings.showStats = on; _ui.update { it.copy(showStats = on) } }
+    // ---- S3-Sicherung ----
+    private val _s3Busy = MutableStateFlow(false)
+    val s3Busy: StateFlow<Boolean> = _s3Busy.asStateFlow()
+    private val _s3Last = MutableStateFlow(settings.s3Last)
+    val s3Last: StateFlow<Long> = _s3Last.asStateFlow()
+
+    /** Encrypts and uploads the backup now (button "Jetzt sichern" and automatic backups). */
+    fun s3BackupNow(quiet: Boolean = false) {
+        if (_s3Busy.value) return
+        val s = settings
+        if (s.s3Bucket.isBlank() || s.s3AccessKey.isBlank() || s.s3SecretKey.isBlank() || s.s3Password.isBlank()) {
+            if (!quiet) notify("S3: Bucket, Zugang und Passwort eintragen."); return
+        }
+        _s3Busy.value = true
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val data = de.foldki.app.data.S3Backup.encrypt(de.foldki.app.data.S3Backup.pack(getApplication(), s), s.s3Password)
+                de.foldki.app.data.S3Backup.upload(s, data)
+                data.size
+            }.onSuccess { n ->
+                val t = System.currentTimeMillis(); s.s3Last = t; _s3Last.value = t
+                if (!quiet) notify("Gesichert (${"%.1f".format(java.util.Locale.GERMANY, n / 1024.0)} KB, verschlüsselt)")
+            }.onFailure { e ->
+                de.foldki.app.data.DebugLog.write("S3-Sicherung fehlgeschlagen: ${e.message}")
+                if (!quiet) notify("S3-Sicherung fehlgeschlagen: ${e.message}")
+            }
+            _s3Busy.value = false
+        }
+    }
+
+    fun setPdfEnabled(on: Boolean) { settings.pdfEnabled = on; _ui.update { it.copy(pdfEnabled = on) } }
+    fun setAutoSpeak(on: Boolean) { settings.autoSpeak = on; _ui.update { it.copy(autoSpeak = on) } }
     fun setWeb(on: Boolean) { settings.webSearch = on; _ui.update { it.copy(webSearch = on) } }
 
     // ---- Gemerkte Antworten ----
@@ -697,6 +737,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(saved = list) }
         viewModelScope.launch(saveDispatcher) { runCatching { savedStore.save(list) } }
         notify("Gemerkt")
+    }
+
+    /** "↻": the answer [answerId] is written again – the question before it is asked once more (with its files). */
+    fun regenerate(answerId: String) {
+        if (_ui.value.generating) return
+        val conv = _ui.value.current ?: return
+        val i = conv.messages.indexOfFirst { it.id == answerId }
+        if (i <= 0) return
+        val q = conv.messages[i - 1].takeIf { it.role == Role.USER } ?: return
+        upsert(conv.copy(messages = conv.messages.subList(0, i - 1)))
+        _ui.update { it.copy(pending = q.attachments) }
+        send(q.text)
     }
 
     fun removeSaved(id: String) {
@@ -773,7 +825,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val system = systemFor(conv.instruction)
                 logSystem = system
                 logHistory = history.size
-                if (isGitHubTask(prompt, history)) {
+                if (settings.githubEnabled && isGitHubTask(prompt, history)) {
                     // GitHub only with a downloaded model on the phone (Nano cannot use tools).
                     if (HfModels.isGguf(act) || act.startsWith(de.foldki.app.ai.PcServer.PREFIX)) {
                         editMessage(conv.id, botMsg.id) {
@@ -808,6 +860,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
                 var ggufThink = false
+                var tAnswer = 0L
                 val thinkOpenName = !useNano && HfModels.isThinking(act)
                 val raw = StringBuilder()
                 var pieces = 0
@@ -817,6 +870,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     pieces++
                     raw.append(d)
                     val sp = ThinkParser.split(raw.toString(), thinkOpenName || ggufThink, finished = false)
+                    if (tAnswer == 0L && sp.answer.isNotBlank() && sp.thoughts.isNotEmpty()) tAnswer = System.currentTimeMillis()
                     if (sp.thinking != _ui.value.thinking) _ui.update { it.copy(thinking = sp.thinking) }
                     editMessage(conv.id, botMsg.id) { it.copy(text = sp.answer, thoughts = sp.thoughts) }
                 }
@@ -883,6 +937,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         tokPerSec = if (!useNano && pieces > 1 && now > tFirst) (pieces - 1) * 1000f / (now - tFirst) else 0f,
                         backend = if (useNano) "AICore" else if (_ui.value.activeServer != null) "PC" else if (HfModels.isGguf(act)) (gguf.backendUsed ?: "") else (llm.backendUsed ?: ""),
                         cpuPct = if (useNano || _ui.value.activeServer != null) -1 else cpu.average(),
+                        thinkMs = if (end.thoughts.isNotEmpty() && tFirst > 0) ((if (tAnswer > 0) tAnswer else now) - tFirst).coerceAtLeast(0) else 0,
                     )
                 }
                 finished = true
@@ -910,6 +965,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 // No PDF from a half-written letter (stopped or failed); only with the switch "Briefe".
                 if (finished && letters) attachDocumentPdf(conv.id, botMsg.id, wantsLetter, openPreview = !voice)
+                // "Antworten automatisch vorlesen" (page Stimmen); in voice mode the overlay speaks itself.
+                if (finished && !voice && settings.autoSpeak && this@ChatViewModel.voice.supertonic.isReady) {
+                    answer?.text?.takeIf { it.isNotBlank() }?.let { this@ChatViewModel.voice.speak(DocumentParser.spoken(it)) }
+                }
                 // Only the still-current job may end "generating" (a stopped job must not end the next one).
                 if (job == null || job === coroutineContext[Job]) _ui.update { it.copy(generating = false, thinking = false, liveCpu = -1) }
                 persist()

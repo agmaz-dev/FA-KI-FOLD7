@@ -58,6 +58,9 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Psychology
@@ -92,6 +95,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -156,13 +160,18 @@ fun ChatApp(vm: ChatViewModel) {
             vm, st,
             onSave = { f, name -> saveFile = f.absolutePath; runCatching { savePdf.launch(name) }.onFailure { vm.notify("Speichern nicht möglich.") } },
             onShare = { f -> runCatching { PdfExporter.shareFile(context, f) }.onFailure { vm.notify("Teilen fehlgeschlagen: ${it.message}") } },
+            onSender = { page = "sender" },
         )
     }
 
+    val brief by vm.brief.collectAsStateWithLifecycle()
+    val drawer = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
     BoxWithConstraints(Modifier.fillMaxSize().background(FK.Bg)) {
         val wide = maxWidth >= 600.dp // Fold7 unfolded / tablets: two panes with a draggable divider
         if (wide) {
-            val openSettings = { split.expandFirst(); page = "" }
+            // Mock-up 18: chat list left, chat right. The ⚙ in the model card at the bottom opens the menu (mock-up 2).
+            var wideMenu by rememberSaveable { mutableStateOf(false) }
             val openPage: (String) -> Unit = { p -> split.expandFirst(); page = p }
             val paneScope = rememberCoroutineScope()
             val sidebarClosed by remember { derivedStateOf { split.collapse == PaneCollapse.FIRST } }
@@ -171,44 +180,53 @@ fun ChatApp(vm: ChatViewModel) {
                 modifier = Modifier.fillMaxSize(),
                 onSettled = { f, c -> vm.settings.splitFraction = f; vm.settings.splitCollapse = c.name },
                 first = {
-                    Surface(color = FK.Side, modifier = Modifier.fillMaxSize()) {
-                        if (showSettings) SettingsScreen(vm, ui, startPage = page!!.ifEmpty { null }, onBack = { page = null })
-                        else Sidebar(ui, vm, onPage = openPage, onPicked = {}, onCollapse = { split.toggleFirst(paneScope) })
+                    Surface(color = FK.Surface, modifier = Modifier.fillMaxSize()) {
+                        when {
+                            showSettings -> SettingsScreen(vm, ui, startPage = page!!.ifEmpty { null }, onBack = { page = null }, onMenu = { page = null; wideMenu = true })
+                            wideMenu -> MenuPanel(ui, vm, onPage = { wideMenu = false; openPage(it) }, onPicked = { wideMenu = false }, onClose = { wideMenu = false })
+                            else -> ChatListPane(ui, vm, onMenu = { wideMenu = true }, onCollapse = { split.toggleFirst(paneScope) })
+                        }
                     }
                 },
                 second = {
                     preview?.let { previewPane(it) } ?: ChatScreen(
-                        ui, vm, showMenu = false, onMenu = {}, onSettings = { openPage("models") }, onInstructions = { openPage("instructions") },
+                        ui, vm, showMenu = false, onMenu = {}, onSettings = { openPage("models") }, onInstructions = { openPage("instructions") }, onVoiceSettings = { openPage("voice") },
                         sidebar = SidebarToggle(open = !sidebarClosed, toggle = { split.toggleFirst(paneScope) }),
                     )
                 },
             )
         } else {
-            val drawer = rememberDrawerState(DrawerValue.Closed)
-            val scope = rememberCoroutineScope()
+            val width = LocalConfiguration.current.screenWidthDp.dp - 70.dp
             ModalNavigationDrawer(
                 drawerState = drawer,
+                scrimColor = androidx.compose.ui.graphics.Color(0x8C000000),
                 drawerContent = {
-                    ModalDrawerSheet(drawerContainerColor = FK.Side, modifier = Modifier.widthIn(max = 320.dp)) {
-                        Sidebar(ui, vm, onPage = { page = it }, onPicked = { scope.launch { drawer.close() } }, onCollapse = null)
+                    ModalDrawerSheet(
+                        drawerContainerColor = androidx.compose.ui.graphics.Color(0xEB1C1C1E), drawerShape = androidx.compose.ui.graphics.RectangleShape,
+                        modifier = Modifier.width(width), windowInsets = WindowInsets(0, 0, 0, 0),
+                    ) {
+                        MenuPanel(ui, vm, onPage = { page = it }, onPicked = { scope.launch { drawer.close() } }, onClose = null)
                     }
                 },
             ) {
-                ChatScreen(ui, vm, showMenu = true, onMenu = { scope.launch { drawer.open() } }, onSettings = { page = "models" }, onInstructions = { page = "instructions" })
+                ChatScreen(ui, vm, showMenu = true, onMenu = { scope.launch { drawer.open() } }, onSettings = { page = "models" }, onInstructions = { page = "instructions" }, onVoiceSettings = { page = "voice" })
             }
         }
 
-        // Folded: settings slide in as a full-screen page; back arrow or back gesture returns to the chat.
+        // Folded: pages slide in full-screen; ☰ goes back to the menu, ‹ / back gesture to the chat.
         AnimatedVisibility(
             visible = showSettings && !wide,
             enter = slideInHorizontally { it } + fadeIn(),
             exit = slideOutHorizontally { it } + fadeOut(),
         ) {
-            SettingsScreen(vm, ui, startPage = page?.ifEmpty { null }, onBack = { page = null })
+            SettingsScreen(vm, ui, startPage = page?.ifEmpty { null }, onBack = { page = null }, onMenu = { page = null; scope.launch { drawer.open() } })
         }
 
+        // Tagesstart (mock-up 17) as its own page in the morning.
+        if (page == null && preview == null) brief?.let { b -> BriefPage(b, onClose = vm::closeBrief, onToggle = vm::toggleOpenItem) }
+
         // Folded: the PDF preview is a full-screen page on top.
-        if (!wide) preview?.let { previewPane(it) }
+        if (!wide && page == null) preview?.let { previewPane(it) }
     }
 }
 
@@ -247,120 +265,81 @@ private fun dayGroup(t: Long): String {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+/** Menu exactly like mock-up 2 (design/2-menue.png). */
 @Composable
-private fun Sidebar(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, onPicked: () -> Unit, onCollapse: (() -> Unit)?) {
+private fun MenuPanel(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, onPicked: () -> Unit, onClose: (() -> Unit)?) {
     var query by rememberSaveable { mutableStateOf("") }
-    var confirmDelete by remember { mutableStateOf<Conversation?>(null) }
-    val shown = remember(ui.conversations, query) {
-        val q = query.trim().lowercase()
-        ui.conversations.filter { c -> q.isEmpty() || c.title.lowercase().contains(q) || c.messages.any { it.text.lowercase().contains(q) } }
-    }
     val go: (String) -> Unit = { onPage(it); onPicked() }
-    Column(Modifier.fillMaxHeight().background(FK.Side).statusBarsPadding().navigationBarsPadding()) {
-        LazyColumn(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-            item {
-                Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp, bottom = 12.dp).heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.size(34.dp).clip(RoundedCornerShape(9.dp))
-                            .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(FK.T7.first, FK.Accent))),
-                        contentAlignment = Alignment.Center,
-                    ) { Spark(18.dp, androidx.compose.ui.graphics.Color.White) }
-                    Spacer(Modifier.width(10.dp))
-                    Text("Fold KI", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f))
-                    if (onCollapse != null) IconButton(onClick = onCollapse) {
-                        Icon(Icons.AutoMirrored.Filled.MenuOpen, "Seitenleiste schließen", tint = FK.Text)
-                    }
-                }
-                Row(
-                    Modifier.fillMaxWidth().height(46.dp).clip(RoundedCornerShape(12.dp)).background(androidx.compose.ui.graphics.Color.White)
-                        .clickable { vm.newChat(); onPicked() },
-                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center,
-                ) {
-                    Icon(Icons.Default.Add, null, tint = androidx.compose.ui.graphics.Color.Black, modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Neuer Chat", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
-                }
-                Row(
-                    Modifier.padding(top = 10.dp, bottom = 4.dp).fillMaxWidth().height(40.dp).clip(RoundedCornerShape(10.dp)).background(FK.Surface2)
-                        .padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Default.Search, null, tint = FK.Dim, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Box(Modifier.weight(1f)) {
-                        if (query.isEmpty()) Text("Chats durchsuchen", color = FK.Dim, fontSize = 15.sp)
-                        BasicTextField(
-                            query, { query = it }, singleLine = true,
-                            textStyle = TextStyle(fontFamily = Inter, fontSize = 15.sp, color = FK.Text),
-                            cursorBrush = SolidColor(FK.Accent), modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    if (query.isNotEmpty()) Icon(Icons.Default.Close, "Suche leeren", tint = FK.Dim, modifier = Modifier.size(18.dp).clickable { query = "" })
-                }
+    Column(Modifier.fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                AppLogo(34.dp)
+                Spacer(Modifier.width(10.dp))
+                Text("Fold KI", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f))
+                if (onClose != null) NavBtn(Icons.Default.Close, "Menü schließen", onClick = onClose)
             }
-            if (query.isBlank()) item {
+            Text(
+                "＋ Neuer Chat", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, textAlign = TextAlign.Center,
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                    .background(androidx.compose.ui.graphics.Color.White).clickable { vm.newChat(); onPicked() }.padding(11.dp),
+            )
+            MenuSearch(query, { query = it }, Modifier.padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 10.dp))
+            if (query.isNotBlank()) {
+                val q = query.trim().lowercase()
+                ui.conversations.filter { c -> c.title.lowercase().contains(q) || c.messages.any { it.text.lowercase().contains(q) } }.take(50).forEach { c ->
+                    ChatListItem(c, selected = c.id == ui.currentId) { vm.open(c.id); onPicked() }
+                }
+            } else {
                 MenuHead("Chats")
                 MenuItem(Icons.Default.ChatBubbleOutline, FK.T2, "Verlauf") { go("history") }
-                MenuItem(Icons.Default.StarBorder, FK.T1, "Gemerkte Antworten", count = ui.saved.size) { go("saved") }
-                MenuItem(Icons.Default.Person, FK.T4, "Meine Anweisungen", count = ui.instructions.size) { go("instructions") }
+                MenuItem(Icons.Default.StarBorder, FK.T1, "Gemerkte Antworten") { go("saved") }
+                MenuItem(Icons.Default.Person, FK.T4, "Meine Anweisungen") { go("instructions") }
                 MenuHead("KI")
                 MenuItem(Icons.Default.Memory, FK.T3, "Modelle", count = ui.localModels.size) { go("models") }
-                MenuItem(Icons.Default.Explore, FK.T7, "Erkunden") { go("hf") }
-                MenuItem(Icons.AutoMirrored.Filled.VolumeUp, FK.T5, "Stimmen") { go("voice") }
-                MenuItem(Icons.Default.Computer, FK.T6, "PC-Server", count = ui.servers.size) { go("server") }
+                MenuItem(Icons.Default.Language, FK.T7, "Erkunden") { go("hf") }
+                MenuItem(Icons.AutoMirrored.Filled.VolumeUp, FK.Danger to androidx.compose.ui.graphics.Color.White, "Stimmen") { go("voice") }
+                MenuItem(Icons.Default.Dns, FK.T6, "PC-Server") { go("server") }
                 MenuItem(Icons.Default.Build, FK.T8, "Werkzeuge") { go("tools") }
                 MenuHead("App")
-                MenuItem(Icons.Default.Settings, FK.T6, "Einstellungen") { go("") }
-            }
-            var last = ""
-            shown.take(if (query.isBlank()) 30 else 200).forEach { c ->
-                val g = dayGroup(c.updatedAt)
-                if (g != last) {
-                    last = g
-                    item(key = "h_$g") { MenuHead(g) }
-                }
-                item(key = c.id) {
-                    val selected = c.id == ui.currentId
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                            .background(if (selected) FK.Surface2 else FK.Side)
-                            .combinedClickable(
-                                onClick = { vm.open(c.id); onPicked() },
-                                onLongClick = { confirmDelete = c },
-                                onLongClickLabel = "Löschen",
-                            )
-                            .padding(horizontal = 10.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(kindIcon(kindOf(c)), null, tint = FK.Muted, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(10.dp))
-                        Text(c.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 15.sp, color = FK.Text)
-                    }
-                }
-            }
-            if (shown.isEmpty() && query.isNotBlank()) item {
-                Text("Nichts gefunden", color = FK.Dim, fontSize = 14.sp, modifier = Modifier.padding(10.dp))
+                MenuItem(Icons.Default.CloudDone, FK.T2, "S3-Sicherung") { go("s3") }
+                MenuItem(Icons.Default.Settings, FK.T10, "Einstellungen") { go("") }
             }
         }
-        // Active model at the bottom (like the mock-up): tap = models page.
-        Row(
-            Modifier.padding(12.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(FK.Surface2)
-                .clickable { go("models") }.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Tile(Icons.Default.Memory, FK.OkSoft to FK.Ok, size = 36.dp, radius = 9.dp)
+        ModelFoot(ui, trailing = "⇅", modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 30.dp)) { go("models") }
+    }
+}
+
+/** Chat list of the unfolded screen exactly like mock-up 18 (left pane). */
+@Composable
+private fun ChatListPane(ui: UiState, vm: ChatViewModel, onMenu: () -> Unit, onCollapse: () -> Unit) {
+    var query by rememberSaveable { mutableStateOf("") }
+    var confirmDelete by remember { mutableStateOf<Conversation?>(null) }
+    Column(Modifier.fillMaxHeight().background(FK.Surface).statusBarsPadding().navigationBarsPadding()) {
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            AppLogo(32.dp)
             Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(ui.activeName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    StatusDot(ui.modelReady); Spacer(Modifier.width(5.dp))
-                    Text(when { ui.usesNano -> "AICore"; ui.backend.isNotBlank() -> ui.backend; ui.modelReady -> "bereit"; else -> "kein Modell" },
-                        fontSize = 12.sp, color = FK.Muted)
-                }
+            Text("Fold KI", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f))
+            Box(Modifier.size(36.dp).clip(CircleShape).background(FK.Surface).clickable(onClick = onCollapse), contentAlignment = Alignment.Center) {
+                Text("◧", fontSize = 18.sp, color = FK.Text)
             }
-            Text("⇅", color = FK.Muted, fontSize = 16.sp)
         }
+        Text(
+            "＋ Neuer Chat", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, textAlign = TextAlign.Center,
+            modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                .background(androidx.compose.ui.graphics.Color.White).clickable { vm.newChat() }.padding(10.dp),
+        )
+        MenuSearch(query, { query = it }, Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp))
+        val q = query.trim().lowercase()
+        val shown = ui.conversations.filter { c -> q.isEmpty() || c.title.lowercase().contains(q) || c.messages.any { it.text.lowercase().contains(q) } }
+        LazyColumn(Modifier.weight(1f)) {
+            var last = ""
+            shown.forEach { c ->
+                val g = dayGroup(c.updatedAt)
+                if (g != last) { last = g; item(key = "h_$g") { MenuHead(g) } }
+                item(key = c.id) { ChatListItem(c, selected = c.id == ui.currentId, onLong = { confirmDelete = c }) { vm.open(c.id) } }
+            }
+        }
+        ModelFoot(ui, trailing = "⚙︎", modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 20.dp), onClick = onMenu)
     }
     confirmDelete?.let { c ->
         AlertDialog(
@@ -374,18 +353,89 @@ private fun Sidebar(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, on
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ChatListItem(c: Conversation, selected: Boolean, onLong: () -> Unit = {}, onClick: () -> Unit) {
+    val model = c.messages.lastOrNull { it.model != null }?.model.orEmpty()
+    val de = java.util.Locale.GERMANY
+    val t = when (dayGroup(c.updatedAt)) {
+        "Heute" -> java.text.SimpleDateFormat("HH:mm", de).format(java.util.Date(c.updatedAt))
+        "Älter" -> java.text.SimpleDateFormat("dd.MM.", de).format(java.util.Date(c.updatedAt))
+        else -> java.text.SimpleDateFormat("EE", de).format(java.util.Date(c.updatedAt)).removeSuffix(".")
+    }
+    Column(
+        Modifier.padding(horizontal = 8.dp).fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (selected) FK.Surface2 else androidx.compose.ui.graphics.Color.Transparent)
+            .combinedClickable(onClick = onClick, onLongClick = onLong, onLongClickLabel = "Löschen").padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Text(c.title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(listOf(model, t).filter { it.isNotBlank() }.joinToString(" · "), fontSize = 12.sp, color = FK.Muted, maxLines = 1)
+    }
+}
+
+/** Active model at the bottom of the menu / chat list (".foot" of the mock-ups). */
+@Composable
+private fun ModelFoot(ui: UiState, trailing: String, modifier: Modifier, onClick: () -> Unit) {
+    Row(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(FK.Surface2).clickable(onClick = onClick).padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Tile(Icons.Default.Memory, FK.Ok.copy(alpha = 0.2f) to FK.Ok)
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(ui.activeName, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(if (ui.modelReady) FK.Ok else FK.Dim))
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    listOfNotNull(
+                        when { ui.usesNano -> "AICore"; ui.activeServer != null -> "PC"; else -> ui.backend.ifBlank { "GPU" } },
+                        ui.activeLocal?.let { LocalModelManager.gb(it.size) },
+                    ).joinToString(" · "),
+                    fontSize = 13.sp, color = FK.Muted,
+                )
+            }
+        }
+        Text(trailing, fontSize = 18.sp, color = FK.Dim)
+    }
+}
+
+/** Grey search field of the menu (".search"): g2, radius 10, 15 sp. */
+@Composable
+private fun MenuSearch(value: String, onChange: (String) -> Unit, modifier: Modifier) {
+    Row(modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(FK.Surface2).padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("🔍", fontSize = 14.sp)
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.weight(1f)) {
+            if (value.isEmpty()) Text("Chats durchsuchen", color = FK.Dim, fontSize = 15.sp)
+            BasicTextField(value, onChange, singleLine = true, textStyle = TextStyle(fontFamily = Inter, fontSize = 15.sp, color = FK.Text),
+                cursorBrush = SolidColor(FK.Accent), modifier = Modifier.fillMaxWidth())
+        }
+        if (value.isNotEmpty()) Text("✕", color = FK.Dim, fontSize = 14.sp, modifier = Modifier.clickable { onChange("") })
+    }
+}
+
+/** App logo: blue gradient tile with the white spark. */
+@Composable
+private fun AppLogo(size: Dp) {
+    Box(
+        Modifier.size(size).clip(RoundedCornerShape(9.dp))
+            .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(FK.T7.first, FK.Accent))),
+        contentAlignment = Alignment.Center,
+    ) { Spark(size * 0.5f, androidx.compose.ui.graphics.Color.White) }
+}
+
 @Composable
 private fun MenuHead(text: String) {
-    Text(text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = FK.Muted, modifier = Modifier.padding(start = 8.dp, top = 16.dp, bottom = 4.dp))
+    Text(text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = FK.Muted, modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 4.dp))
 }
 
 @Composable
 private fun MenuItem(icon: ImageVector, tone: Pair<androidx.compose.ui.graphics.Color, androidx.compose.ui.graphics.Color>, title: String, count: Int = 0, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(horizontal = 6.dp, vertical = 8.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Tile(icon, tone, size = 28.dp, radius = 7.dp, iconSize = 16.dp)
+        Tile(icon, tone, size = 28.dp, radius = 7.dp, iconSize = 18.dp)
         Spacer(Modifier.width(12.dp))
         Text(title, fontSize = 16.sp, color = FK.Text, modifier = Modifier.weight(1f))
         if (count > 0) Text("$count", fontSize = 15.sp, color = FK.Muted)
@@ -401,38 +451,38 @@ private fun modelName(ui: UiState): String = ui.activeName
 
 private fun modelReady(ui: UiState): Boolean = ui.modelReady
 
+/** Top bar exactly like mock-ups 1 and 11: ☰ left, model in the middle, new chat (empty chat) or ⋮ (chat with messages) right. */
 @Composable
 private fun TopBar(ui: UiState, showMenu: Boolean, onMenu: () -> Unit, sidebar: SidebarToggle?, onModel: () -> Unit, onNew: () -> Unit, onOptions: () -> Unit) {
-    Row(Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        val right = showMenu || (sidebar != null && !sidebar.open)
-        Box(Modifier.width(88.dp), contentAlignment = Alignment.CenterStart) {
-            if (showMenu) CircleBtn(Icons.Default.Menu, "Menü", onMenu)
-            else if (sidebar != null && !sidebar.open) CircleBtn(Icons.Default.Menu, "Seitenleiste öffnen", sidebar.toggle)
+    val empty = ui.current?.messages.isNullOrEmpty()
+    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(36.dp)) {
+            if (showMenu) NavBtn(Icons.Default.Menu, "Menü", onClick = onMenu)
+            else if (sidebar != null && !sidebar.open) NavBtn(Icons.Default.Menu, "Seitenleiste öffnen", onClick = sidebar.toggle)
         }
         Column(
-            Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable(onClick = onModel).padding(vertical = 4.dp),
+            Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable(onClick = onModel).padding(vertical = 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(modelName(ui), fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 200.dp))
-                Text(" ⌄", fontSize = 14.sp, color = FK.Muted)
-            }
+            Text(modelName(ui) + " ⌄", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (ui.incognito) Text("🕶 Inkognito", fontSize = 12.sp, color = FK.Muted)
                 else {
-                    StatusDot(modelReady(ui)); Spacer(Modifier.width(5.dp))
+                    Box(Modifier.size(7.dp).clip(CircleShape).background(if (modelReady(ui)) FK.Ok else FK.Dim))
+                    Spacer(Modifier.width(4.dp))
                     Text(
-                        listOf(if (ui.usesNano) "AICore" else if (ui.activeServer != null) "PC · ${ui.activeServer!!.typeLabel}" else ui.backend.ifBlank { "GPU" },
-                            if (ui.webSearch) "Web" else if (ui.activeServer != null) "WLAN" else "offline").joinToString(" · "),
+                        listOf(
+                            when { ui.usesNano -> "AICore"; ui.activeServer != null -> "PC"; else -> ui.backend.ifBlank { "GPU" } },
+                            if (ui.webSearch) "Web" else if (ui.activeServer != null) "WLAN" else "offline",
+                        ).joinToString(" · "),
                         fontSize = 12.sp, color = FK.Muted,
                     )
                 }
             }
         }
-        Row(Modifier.width(88.dp), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
-            if (right) CircleBtn(Icons.Default.Edit, "Neuer Chat", onNew)
-            CircleBtn(Icons.Default.MoreVert, "Chat-Einstellungen", onOptions)
+        Box(Modifier.size(36.dp)) {
+            if (empty && (showMenu || (sidebar != null && !sidebar.open))) NavBtn(Icons.Default.Edit, "Neuer Chat", onClick = onNew)
+            else if (!empty) NavBtn(Icons.Default.MoreVert, "Chat-Einstellungen", onClick = onOptions)
         }
     }
 }
@@ -444,63 +494,66 @@ private fun CircleBtn(icon: ImageVector, label: String, onClick: () -> Unit) {
     }
 }
 
-/** Sheet "Dieser Chat": Inkognito, own instruction, web search, creativity, length, view. */
+/** Sheet "Dieser Chat" exactly like mock-up 12. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatOptionsSheet(ui: UiState, vm: ChatViewModel, onDismiss: () -> Unit, onInstructions: () -> Unit) {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var pickInstruction by remember { mutableStateOf(false) }
     ModalBottomSheet(
-        onDismissRequest = onDismiss, sheetState = state, containerColor = FK.Bg, scrimColor = FK.Scrim,
-        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp), dragHandle = { Grab() },
+        onDismissRequest = onDismiss, sheetState = state, containerColor = FK.Surface, scrimColor = FK.Scrim,
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+        dragHandle = { Box(Modifier.padding(top = 8.dp, bottom = 12.dp).size(36.dp, 5.dp).clip(RoundedCornerShape(3.dp)).background(FK.Surface3)) },
     ) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 24.dp).navigationBarsPadding()) {
-            Text("Dieser Chat", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.padding(start = 4.dp, bottom = 12.dp))
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 34.dp).navigationBarsPadding()) {
+            Text("Dieser Chat", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.padding(start = 4.dp, bottom = 12.dp))
             Group {
-                SettingRow("Inkognito", "wird nicht auf dem Handy gespeichert", leading = { Tile(Icons.Default.VisibilityOff, FK.T6) }) {
-                    FkToggle(ui.incognito, { vm.setIncognito(it) })
-                }
+                SettingRow("Inkognito", "wird nicht gespeichert", leading = {
+                    Box(Modifier.size(30.dp).clip(RoundedCornerShape(7.dp)).background(FK.T6.first), contentAlignment = Alignment.Center) { Text("🕶", fontSize = 15.sp) }
+                }) { FkToggle(ui.incognito, { vm.setIncognito(it) }) }
                 GroupDivider()
                 SettingRow("Anweisung", null, leading = { Tile(Icons.Default.Person, FK.T4) }, onClick = { pickInstruction = !pickInstruction }) {
-                    Text(ui.chatInstructionName, fontSize = 15.sp, color = FK.Muted); Chevron()
+                    RowValue(ui.chatInstructionName.let { if (it == "Standard") "Keine" else it }); Chevron()
                 }
                 if (pickInstruction) {
-                    val opts = listOf("" to "Standard (Systemanweisung)") + ui.instructions.map { it.id to (it.emoji + " " + it.name) }
-                    opts.forEach { (id, name) ->
+                    (listOf("" to "Keine") + ui.instructions.map { it.id to (it.emoji + " " + it.name) }).forEach { (id, name) ->
                         GroupDivider()
                         SettingRow(name, null, leading = { Spacer(Modifier.width(30.dp)) }, onClick = { vm.setChatInstruction(id); pickInstruction = false }) {
-                            if (ui.chatInstruction == id) Icon(Icons.Default.Check, "Gewählt", tint = FK.Accent, modifier = Modifier.size(20.dp))
+                            if (ui.chatInstruction == id) Text("✓", color = FK.Accent, fontSize = 18.sp)
                         }
                     }
                     GroupDivider()
                     SettingRow("Anweisungen bearbeiten …", null, leading = { Spacer(Modifier.width(30.dp)) }, onClick = { onDismiss(); onInstructions() })
                 }
                 GroupDivider()
-                SettingRow("Websuche", "sucht mit deiner Frage", leading = { Tile(Icons.Default.Language, FK.T7) }) {
-                    FkToggle(ui.webSearch, { vm.setWeb(it) })
-                }
+                SettingRow("Websuche", null, leading = { Tile(Icons.Default.Language, FK.T7) }) { FkToggle(ui.webSearch, { vm.setWeb(it) }) }
             }
             SectionLabel("Antwort")
             Group {
-                Column(Modifier.padding(14.dp)) {
-                    Text("Kreativität", fontSize = 16.sp, color = FK.Text)
-                    Spacer(Modifier.height(8.dp))
-                    val cs = de.foldki.app.data.Creativity.entries
-                    Segmented(cs.map { it.label }, cs.indexOf(ui.creativity)) { vm.setCreativity(cs[it]) }
-                    Spacer(Modifier.height(16.dp))
-                    Text("Länge", fontSize = 16.sp, color = FK.Text)
-                    Spacer(Modifier.height(8.dp))
-                    val ls = de.foldki.app.data.AnswerLength.entries
-                    Segmented(ls.map { it.label }, ls.indexOf(ui.answerLength)) { vm.setAnswerLength(ls[it]) }
-                    Spacer(Modifier.height(8.dp))
-                    Note("„Standard“ und „Frei“ = das Modell bekommt keine Vorgaben.")
+                Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 14.dp)) {
+                    val cs = listOf(de.foldki.app.data.Creativity.PRECISE, de.foldki.app.data.Creativity.STANDARD, de.foldki.app.data.Creativity.BALANCED, de.foldki.app.data.Creativity.CREATIVE)
+                    val cLabels = listOf("genau", "normal", "ausgewogen", "kreativ")
+                    var c by remember { mutableStateOf(cs.indexOf(ui.creativity).coerceAtLeast(0).toFloat()) }
+                    Row(Modifier.padding(top = 8.dp)) {
+                        Text("Kreativität", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = FK.Text, modifier = Modifier.weight(1f))
+                        RowValue(cLabels[c.toInt().coerceIn(0, 3)])
+                    }
+                    FkSlider(c, { c = it }, 0f..3f, steps = 2, onDone = { vm.setCreativity(cs[c.toInt().coerceIn(0, 3)]) })
+                    val ls = listOf(de.foldki.app.data.AnswerLength.SHORT, de.foldki.app.data.AnswerLength.NORMAL, de.foldki.app.data.AnswerLength.LONG, de.foldki.app.data.AnswerLength.FREE)
+                    var l by remember { mutableStateOf(ls.indexOf(ui.answerLength).coerceAtLeast(0).toFloat()) }
+                    Row(Modifier.padding(top = 8.dp)) {
+                        Text("Länge", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = FK.Text, modifier = Modifier.weight(1f))
+                        val cur = ls[l.toInt().coerceIn(0, 3)]
+                        RowValue(if (cur.tokens == 0) "frei" else "bis ${cur.tokens} Tokens")
+                    }
+                    FkSlider(l, { l = it }, 0f..3f, steps = 2, onDone = { vm.setAnswerLength(ls[l.toInt().coerceIn(0, 3)]) })
                 }
             }
             SectionLabel("Ansicht")
             Group {
-                SettingRow("Gedanken anzeigen", null, leading = { Tile(Icons.Default.Psychology, FK.T4) }) { FkToggle(ui.showThoughts, { vm.setShowThoughts(it) }) }
+                SettingRow("Gedanken anzeigen", null) { FkToggle(ui.showThoughts, { vm.setShowThoughts(it) }) }
                 GroupDivider()
-                SettingRow("Statistik unter Antworten", "GPU · Tokens · Zeit", leading = { Tile(Icons.Default.Speed, FK.T8) }) { FkToggle(ui.showStats, { vm.setShowStats(it) }) }
+                SettingRow("Statistik unter Antworten", null) { FkToggle(ui.showStats, { vm.setShowStats(it) }) }
             }
         }
     }
@@ -578,73 +631,59 @@ private const val P_REPLY = "Schreibe ein formelles Antwortschreiben (Gegenschre
 private const val P_OBJECT = "Schreibe einen formellen, fristgerechten Widerspruch gegen das angehängte Schreiben mit sachlicher Begründung."
 private const val P_SUMMARY = "Fasse das angehängte Dokument verständlich zusammen: Worum geht es, was wird von mir verlangt, welche Fristen gibt es?"
 private const val P_GITHUB = "Auf GitHub: "
+private const val P_IMPROVE = "Verbessere diesen Text (kürzer, klarer, höflicher):\n"
 
 private fun greeting(): String {
     val h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
     return when { h < 11 -> "Guten Morgen"; h < 18 -> "Guten Tag"; else -> "Guten Abend" }
 }
 
+/** Start screen exactly like mock-up 1: blue orb, "Wie kann ich helfen?", "Alles bleibt auf deinem Fold.", two cards. */
 @Composable
 private fun StartScreen(ui: UiState, vm: ChatViewModel, onSettings: () -> Unit, onCard: (String, Boolean) -> Unit) {
-    val brief by vm.brief.collectAsStateWithLifecycle()
-    val profiles by vm.profiles.collectAsStateWithLifecycle()
-    val first = profiles.first.firstOrNull { it.id == profiles.second }?.name?.trim()?.split(Regex("\\s+"))?.firstOrNull().orEmpty()
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val maxCard = maxHeight * 0.45f
-        Column(Modifier.fillMaxSize()) {
-            Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
-            ) {
-                brief?.let { b ->
-                    BriefCard(
-                        b, onClose = vm::closeBrief, onOpenChat = vm::openBriefAsChat, onToggle = vm::toggleOpenItem,
-                        modifier = Modifier.padding(vertical = 8.dp).widthIn(max = 680.dp).fillMaxWidth().heightIn(max = maxCard),
-                    )
-                    Spacer(Modifier.height(16.dp))
-                }
-                Box(
-                    Modifier.size(84.dp).clip(RoundedCornerShape(26.dp))
-                        .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(FK.T7.first, FK.Accent, androidx.compose.ui.graphics.Color(0xFF64D2FF)))),
-                    contentAlignment = Alignment.Center,
-                ) { Spark(40.dp, androidx.compose.ui.graphics.Color.White) }
-                Spacer(Modifier.height(22.dp))
-                Text(
-                    if (first.isBlank()) "Wie kann ich helfen?" else "${greeting()}, $first",
-                    fontSize = 28.sp, fontWeight = FontWeight.Bold, color = FK.Text, letterSpacing = (-0.4).sp, textAlign = TextAlign.Center,
-                )
+    Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 30.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
+        ) {
+            Box(
+                Modifier.padding(bottom = 26.dp).size(92.dp)
+                    .shadow(30.dp, RoundedCornerShape(28.dp), ambientColor = FK.Accent, spotColor = FK.Accent)
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(androidx.compose.ui.graphics.Brush.linearGradient(
+                        0f to FK.T7.first, 0.55f to FK.Accent, 1f to androidx.compose.ui.graphics.Color(0xFF64D2FF),
+                    )),
+                contentAlignment = Alignment.Center,
+            ) { Spark(46.dp, androidx.compose.ui.graphics.Color.White) }
+            Text("Wie kann ich helfen?", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = FK.Text, letterSpacing = (-0.4).sp, textAlign = TextAlign.Center, lineHeight = 32.sp)
+            Text(
+                if (ui.incognito) "Inkognito – dieser Chat wird nicht gespeichert." else "Alles bleibt auf deinem Fold.",
+                fontSize = 15.sp, color = FK.Muted, textAlign = TextAlign.Center, lineHeight = 21.sp, modifier = Modifier.padding(top = 10.dp),
+            )
+            if (ui.usesNano && !ui.nanoReady) {
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    if (ui.incognito) "Inkognito – dieser Chat wird nicht gespeichert." else "Alles bleibt auf deinem Fold.",
-                    fontSize = 15.sp, color = FK.Muted, textAlign = TextAlign.Center,
-                )
-                if (ui.usesNano && !ui.nanoReady) {
-                    Spacer(Modifier.height(8.dp))
-                    Note(ui.nanoStatus)
-                    if (ui.nanoDownloadable) TextButton(onClick = { vm.downloadNano() }) { Text("Gemini Nano herunterladen", color = FK.Accent) }
-                    else TextButton(onClick = { vm.checkNano() }) { Text("Erneut prüfen", color = FK.Accent) }
-                } else if (!ui.modelReady) {
-                    TextButton(onClick = onSettings) { Text("Modell wählen oder herunterladen", color = FK.Accent) }
-                }
+                Note(ui.nanoStatus)
+                if (ui.nanoDownloadable) TextButton(onClick = { vm.downloadNano() }) { Text("Gemini Nano herunterladen", color = FK.Accent) }
+                else TextButton(onClick = { vm.checkNano() }) { Text("Erneut prüfen", color = FK.Accent) }
+            } else if (!ui.modelReady) {
+                TextButton(onClick = onSettings) { Text("Modell wählen oder herunterladen", color = FK.Accent) }
             }
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                StartChip("📄 Brief beantworten", "PDF oder Foto anhängen") { onCard(P_REPLY, true) }
-                StartChip("⚖️ Widerspruch", "sachlich und mit Frist") { onCard(P_OBJECT, true) }
-                StartChip("📝 Zusammenfassen", "Dokument erklären") { onCard(P_SUMMARY, true) }
-                StartChip("💻 GitHub", "Code und APKs") { onCard(P_GITHUB, false) }
-            }
+        }
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            StartChip("📄 Brief beantworten", "PDF oder Foto anhängen") { onCard(P_REPLY, true) }
+            StartChip("✍️ Text verbessern", "kürzer, klarer, höflicher") { onCard(P_IMPROVE, false) }
         }
     }
 }
 
 @Composable
 private fun StartChip(title: String, sub: String, onClick: () -> Unit) {
-    Column(Modifier.widthIn(min = 160.dp).clip(RoundedCornerShape(16.dp)).background(FK.Surface).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 11.dp)) {
+    Column(Modifier.widthIn(min = 160.dp).clip(RoundedCornerShape(16.dp)).background(FK.Surface).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp)) {
         Text(title, fontSize = 14.sp, color = FK.Text, maxLines = 1)
-        Text(sub, fontSize = 12.sp, color = FK.Muted, maxLines = 1)
+        Text(sub, fontSize = 12.sp, color = FK.Muted, maxLines = 1, modifier = Modifier.padding(top = 2.dp))
     }
 }
 
@@ -653,7 +692,7 @@ private fun StartChip(title: String, sub: String, onClick: () -> Unit) {
 @Composable
 private fun ChatScreen(
     ui: UiState, vm: ChatViewModel, showMenu: Boolean, onMenu: () -> Unit, onSettings: () -> Unit,
-    sidebar: SidebarToggle? = null, onInstructions: () -> Unit = onSettings,
+    sidebar: SidebarToggle? = null, onInstructions: () -> Unit = onSettings, onVoiceSettings: () -> Unit = onSettings,
 ) {
     val context = LocalContext.current
     val messages = ui.current?.messages.orEmpty()
@@ -745,10 +784,12 @@ private fun ChatScreen(
         },
         hasSignature = hasSignature,
         save = { m -> vm.saveAnswer(m) },
+        retry = { m -> vm.regenerate(m.id) },
+        pdf = ui.pdfEnabled,
     )
 
     if (voiceMode) {
-        VoiceOverlay(ui, vm, voice, onClose = { voiceMode = false })
+        VoiceOverlay(ui, vm, voice, onClose = { voiceMode = false }, onSettings = { voiceMode = false; onVoiceSettings() })
         return
     }
 
@@ -769,8 +810,8 @@ private fun ChatScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize().widthIn(max = 760.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 ) {
                     items(messages, key = { it.id }) { m ->
                         val typing = ui.generating && m === messages.last() && m.role == Role.ASSISTANT
@@ -801,6 +842,8 @@ private class MessageActions(
     val shareFile: (Attachment) -> Unit,
     val hasSignature: Boolean,
     val save: (ChatMessage) -> Unit = {},
+    val retry: (ChatMessage) -> Unit = {},
+    val pdf: Boolean = true,
 )
 
 // ---------------------------------------------------------------- Attachment sheet (image 3)
@@ -870,26 +913,17 @@ private fun BigTile(icon: ImageVector, label: String, modifier: Modifier, onClic
 
 // ---------------------------------------------------------------- Messages (image 6)
 
+/** One message exactly like mock-up 11: files as cards, blue bubble, "Gedanken" pill, answer, stats line, text actions. */
 @Composable
 private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions, liveCpu: Int = -1, showThoughts: Boolean = true, showStats: Boolean = true) {
     if (m.role == Role.USER) {
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-            Column(
-                Modifier.fillMaxWidth(0.8f).wrapContentWidth(Alignment.End)
-                    .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 6.dp, bottomStart = 20.dp))
-                    .background(FK.Accent).padding(horizontal = 14.dp, vertical = 10.dp),
-            ) {
-                SelectionContainer { Text(m.text, fontSize = 16.sp, lineHeight = 22.sp, color = FK.OnAccent) }
-                m.attachments.forEach { a ->
-                    Row(
-                        Modifier.padding(top = 8.dp).clickable { actions.open(a) },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Default.AttachFile, null, tint = FK.OnAccent, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(a.name, fontSize = 13.sp, color = FK.OnAccent, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            m.attachments.forEach { a -> FileCard(a, actions) }
+            if (m.text.isNotBlank()) Box(Modifier.fillMaxWidth(0.78f), contentAlignment = Alignment.CenterEnd) {
+                Box(
+                    Modifier.clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 6.dp, bottomStart = 20.dp))
+                        .background(FK.Accent).padding(horizontal = 14.dp, vertical = 10.dp),
+                ) { SelectionContainer { Text(m.text, fontSize = 15.sp, lineHeight = 20.sp, color = androidx.compose.ui.graphics.Color.White) } }
             }
         }
     } else {
@@ -897,118 +931,94 @@ private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions,
             val parts = remember(m.text) { DocumentParser.parse(m.text) }
             val clean = remember(m.text) { DocumentParser.display(m.text) }
             val doc = parts.document
-            val exportText = doc ?: clean
-            val textColor = if (m.isError) androidx.compose.ui.graphics.Color(0xFFF2B8B5) else FK.Text
-            if (m.engine != null) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
-                    StatusDot(!m.isError)
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        when (m.engine) {
-                            Engine.NANO -> "Gemini Nano · " + if (m.web) "Web" else "offline"
-                            Engine.GEMMA -> (m.model ?: "Gemma 4 E2B") + " · " + if (m.web) "Web" else "offline"
-                            else -> "Claude · online" + if (m.web) " · Websuche" else ""
-                        },
-                        fontSize = 12.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
+            val textColor = if (m.isError) FK.Danger else androidx.compose.ui.graphics.Color(0xFFF2F2F7)
             val stillThinking = typing && m.text.isEmpty() && m.thoughts.isNotEmpty()
-            if (m.thoughts.isNotEmpty() && (showThoughts || stillThinking)) Thoughts(m.thoughts, stillThinking, liveCpu)
+            if (m.thoughts.isNotEmpty() && (showThoughts || stillThinking)) Thoughts(m.thoughts, stillThinking, liveCpu, m.thinkMs)
             if (doc == null) {
-                if (!stillThinking) AnswerText(
-                    textColor,
-                    if (m.text.isEmpty() && typing) (if (m.web) "Suche im Internet…" else "…" + if (liveCpu >= 0) "  CPU $liveCpu %" else "") else clean,
-                )
+                if (!stillThinking) AnswerText(textColor, if (m.text.isEmpty() && typing) (if (m.web) "Suche im Internet …" else "…") else clean)
             } else {
                 if (parts.before.isNotBlank()) AnswerText(textColor, DocumentParser.clean(parts.before))
-                val shape = RoundedCornerShape(14.dp)
-                Column(
-                    Modifier.padding(vertical = 10.dp).widthIn(max = 720.dp).fillMaxWidth().clip(shape).background(FK.Surface)
-                        .border(1.dp, FK.Line, shape).padding(14.dp),
-                ) {
-                    SelectionContainer { Text(doc, fontSize = 14.sp, lineHeight = 21.sp, color = FK.Text) }
-                    if (!typing) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
-                            if (!parts.complete) Text("Unvollständig", fontSize = 12.sp, color = androidx.compose.ui.graphics.Color(0xFFF2B8B5))
-                            Spacer(Modifier.weight(1f))
-                            FkChip("PDF", Icons.Default.PictureAsPdf) { actions.savePdf(doc) }
-                        }
-                    }
-                }
+                if (!typing && actions.pdf) DocLine("Schreiben.pdf", if (parts.complete) "DIN 5008" else "unvollständig") { actions.savePdf(doc) }
+                else SelectionContainer { Text(doc, fontSize = 15.sp, lineHeight = 22.sp, color = textColor) }
                 if (parts.after.isNotBlank()) AnswerText(textColor, DocumentParser.clean(parts.after))
             }
             m.attachments.forEach { a -> DocCard(a, actions) }
             if (showStats && !typing && (m.tokens > 0 || m.answerMs > 0)) AnswerStats(m)
             if (!typing && !m.isError && m.text.isNotBlank()) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp).offset(x = (-10).dp)) {
-                    SmallAction(Icons.Default.ContentCopy, "Kopieren") { actions.copy(clean) }
-                    SmallAction(Icons.Default.PictureAsPdf, "Als PDF") { actions.savePdf(exportText) }
-                    SmallAction(if (actions.speakingId == m.id) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
-                        if (actions.speakingId == m.id) "Vorlesen stoppen" else "Vorlesen") { actions.speak(m.id, DocumentParser.spoken(m.text)) }
-                    SmallAction(Icons.Default.StarBorder, "Merken") { actions.save(m) }
-                    SmallAction(Icons.Default.Share, "Teilen") { actions.sharePdf(exportText) }
+                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    TextAction("⧉ Kopieren") { actions.copy(clean) }
+                    TextAction(if (actions.speakingId == m.id) "■ Stopp" else "🔊 Vorlesen") { actions.speak(m.id, DocumentParser.spoken(m.text)) }
+                    TextAction("☆ Merken") { actions.save(m) }
+                    TextAction("↻") { actions.retry(m) }
                 }
             }
         }
     }
 }
 
-/** Small line under an answer: where it ran, CPU load, tokens, time, speed (only shown, never exported or spoken). */
+@Composable
+private fun TextAction(label: String, onClick: () -> Unit) {
+    Text(label, fontSize = 13.sp, color = FK.Muted, modifier = Modifier.clip(RoundedCornerShape(6.dp)).clickable(onClick = onClick).padding(vertical = 4.dp))
+}
+
+/** "GPU · 214 Tokens · 6,1 s · 35 Tokens/s" (only shown, never exported or spoken). */
 @Composable
 private fun AnswerStats(m: ChatMessage) {
     val de = java.util.Locale.GERMANY
     val parts = buildList {
         if (m.backend.isNotBlank()) add(m.backend)
-        if (m.cpuPct >= 0) add("CPU ${m.cpuPct} %")
         if (m.tokens > 0) add("%,d Tokens".format(de, m.tokens))
         if (m.answerMs > 0) add("%.1f s".format(de, m.answerMs / 1000.0))
-        if (m.tokPerSec > 0f) add("%.1f Tokens/s".format(de, m.tokPerSec))
+        if (m.tokPerSec > 0f) add("%.0f Tokens/s".format(de, m.tokPerSec))
     }
-    Text(parts.joinToString(" · "), fontSize = 11.sp, color = FK.Muted, maxLines = 2, modifier = Modifier.padding(top = 6.dp))
+    Text(parts.joinToString(" · "), fontSize = 12.sp, color = FK.Dim, maxLines = 2, modifier = Modifier.padding(top = 6.dp))
 }
 
-/** "Gedanken" of a thinking model: collapsed by default, tap to expand (only shown, never exported or spoken). */
+/** "💭 Gedanken · 4 s ⌄": collapsed by default, tap to expand (never exported or spoken). */
 @Composable
-private fun Thoughts(text: String, thinking: Boolean, liveCpu: Int) {
+private fun Thoughts(text: String, thinking: Boolean, liveCpu: Int, thinkMs: Long) {
     var open by rememberSaveable { mutableStateOf(false) }
-    Row(
-        Modifier.padding(bottom = 6.dp).clip(RoundedCornerShape(20.dp)).background(FK.Surface).clickable { open = !open }
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(if (thinking) "💭 Denkt nach…" else "💭 Gedanken", fontSize = 13.sp, color = FK.Muted)
-        if (thinking && liveCpu >= 0) { Spacer(Modifier.width(8.dp)); Text("CPU $liveCpu %", fontSize = 12.sp, color = FK.Accent) }
-        Spacer(Modifier.width(8.dp))
-        Text(if (open) "▲" else "▼", fontSize = 11.sp, color = FK.Muted)
-    }
-    if (open) {
-        val shape = RoundedCornerShape(14.dp)
-        Column(
-            Modifier.padding(bottom = 10.dp).widthIn(max = 720.dp).fillMaxWidth().clip(shape).background(FK.Surface)
-                .border(1.dp, FK.Line, shape).padding(14.dp),
-        ) {
-            SelectionContainer { Text(text, fontSize = 13.sp, lineHeight = 19.sp, color = FK.Muted) }
+    val de = java.util.Locale.GERMANY
+    Column(Modifier.padding(bottom = 12.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(FK.Surface).clickable { open = !open }.padding(horizontal = 12.dp, vertical = 9.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (thinking) "💭 Denkt nach …" + if (liveCpu >= 0) " · CPU $liveCpu %" else ""
+                else "💭 Gedanken" + if (thinkMs > 0) " · " + "%.0f s".format(de, thinkMs / 1000.0) else "",
+                fontSize = 13.sp, color = FK.Muted, modifier = Modifier.weight(1f),
+            )
+            Text(if (open) "⌃" else "⌄", fontSize = 13.sp, color = FK.Muted)
         }
+        if (open) SelectionContainer { Text(text, fontSize = 13.sp, lineHeight = 19.sp, color = FK.Muted, modifier = Modifier.padding(top = 8.dp)) }
     }
-}
-
-@Composable
-private fun SmallAction(icon: ImageVector, label: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(40.dp)) { Icon(icon, label, tint = FK.Dim, modifier = Modifier.size(18.dp)) }
 }
 
 @Composable
 private fun AnswerText(color: androidx.compose.ui.graphics.Color, text: String) {
-    SelectionContainer { Text(text, fontSize = 16.sp, lineHeight = 24.sp, color = color) }
+    SelectionContainer { Text(text, fontSize = 15.sp, lineHeight = 22.5.sp, color = color) }
 }
 
-/** Finished PDF in an answer: card with page count (image 6). Tap = open, long press = share. */
-@OptIn(ExperimentalFoundationApi::class)
+/** Letter/PDF card in an answer (".doccard"): orange icon, name, kind, "Öffnen". */
 @Composable
-private fun DocCard(a: Attachment, actions: MessageActions) {
+private fun DocLine(name: String, sub: String, onOpen: () -> Unit) {
+    Row(
+        Modifier.padding(top = 10.dp).widthIn(max = 720.dp).fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(FK.Surface).clickable(onClick = onOpen).padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Tile(Icons.Default.Description, FK.T1, size = 40.dp, radius = 10.dp, iconSize = 20.dp)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(name, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(sub, fontSize = 13.sp, color = FK.Muted, maxLines = 1)
+        }
+        Spacer(Modifier.width(12.dp))
+        Cta("Öffnen", onClick = onOpen)
+    }
+}
+
+@Composable
+private fun pageCount(a: Attachment): Int {
     val pages by produceState(0, a.path) {
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        value = if (!a.isPdf) 0 else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
                 android.os.ParcelFileDescriptor.open(java.io.File(a.path), android.os.ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
                     android.graphics.pdf.PdfRenderer(fd).use { it.pageCount }
@@ -1016,27 +1026,35 @@ private fun DocCard(a: Attachment, actions: MessageActions) {
             }.getOrDefault(0)
         }
     }
-    val shape = RoundedCornerShape(14.dp)
+    return pages
+}
+
+/** File the user attached (".att" of mock-up 11): right-aligned card with red icon, name and pages. */
+@Composable
+private fun FileCard(a: Attachment, actions: MessageActions) {
+    val pages = pageCount(a)
     Row(
-        Modifier.padding(top = 10.dp).widthIn(max = 720.dp).fillMaxWidth().clip(shape).background(FK.Surface).border(1.dp, FK.Line, shape)
-            .combinedClickable(onClick = { actions.open(a) }, onLongClick = { actions.shareFile(a) }, onLongClickLabel = "Teilen")
-            .padding(12.dp),
+        Modifier.clip(RoundedCornerShape(14.dp)).background(FK.Surface).clickable { actions.open(a) }.padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Tile(if (a.isPdf) Icons.Default.Description else Icons.Default.Image, FK.AccentSoft to FK.Accent, size = 42.dp, radius = 12.dp, iconSize = 20.dp)
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(a.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                if (!a.isPdf) "Bild" else listOfNotNull(
-                    if (pages > 0) (if (pages == 1) "1 Seite" else "$pages Seiten") else "PDF",
-                    if (actions.hasSignature) "mit Unterschrift" else null,
-                ).joinToString(" · "),
-                fontSize = 12.sp, color = FK.Muted,
-            )
+        Tile(if (a.isPdf) Icons.Default.Description else Icons.Default.Image, FK.Danger to androidx.compose.ui.graphics.Color.White)
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(a.name, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
+            Text(if (!a.isPdf) "Bild" else if (pages == 1) "1 Seite" else if (pages > 1) "$pages Seiten" else "PDF", fontSize = 13.sp, color = FK.Muted)
         }
-        Chevron()
     }
+}
+
+/** Finished PDF in an answer: same card as [DocLine]. Tap = open, long press = share. */
+@Composable
+private fun DocCard(a: Attachment, actions: MessageActions) {
+    val pages = pageCount(a)
+    DocLine(a.name, listOfNotNull(
+        if (a.isPdf) "DIN 5008" else "Bild",
+        if (pages == 1) "1 Seite" else if (pages > 1) "$pages Seiten" else null,
+        if (actions.hasSignature && a.isPdf) "mit Unterschrift" else null,
+    ).joinToString(" · ")) { actions.open(a) }
 }
 
 // ---------------------------------------------------------------- Composer (image 1 / 6)
@@ -1069,7 +1087,7 @@ private fun InputBar(
     }
     DisposableEffect(Unit) { onDispose { if (dictating) voice.cancelListening() } }
 
-    Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         // Answer suggestions from the AI's reading of the last letter (like FA-PDF)
         val lastLetter = ui.current?.messages?.lastOrNull { m -> m.role == Role.USER && m.attachments.any { it.analysis != null } }
             ?.attachments?.lastOrNull { it.analysis != null }
@@ -1093,10 +1111,9 @@ private fun InputBar(
             ) { chips.forEach { (label, go) -> FkChip(label, Icons.Default.Description, onClick = go) } }
         }
 
-        val shape = RoundedCornerShape(26.dp)
+        val shape = RoundedCornerShape(24.dp)
         Column(
-            Modifier.widthIn(max = 760.dp).fillMaxWidth().clip(shape).background(FK.Surface).border(0.5.dp, FK.Surface3, shape)
-                .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            Modifier.widthIn(max = 760.dp).fillMaxWidth().clip(shape).background(FK.Surface).border(0.5.dp, FK.Surface3, shape).padding(6.dp),
         ) {
             if (ui.pending.isNotEmpty() || ui.importing) {
                 Row(
@@ -1124,7 +1141,7 @@ private fun InputBar(
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                RoundOutline(onAttach) { Icon(Icons.Default.Add, "Hinzufügen", tint = FK.Text, modifier = Modifier.size(20.dp)) }
+                RoundOutline(onAttach) { Icon(Icons.Default.Add, "Hinzufügen", tint = FK.Text, modifier = Modifier.size(18.dp)) }
                 Box(Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 8.dp)) {
                     if (text.isEmpty()) Text(
                         when {
@@ -1145,7 +1162,7 @@ private fun InputBar(
                 if (!ui.generating && text.isBlank()) RoundOutline(dictate) {
                     if (recognizing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = FK.Accent)
                     else Icon(if (dictating) Icons.Default.MicOff else Icons.Default.Mic, if (dictating) "Diktat beenden" else "Diktieren",
-                        tint = if (dictating) FK.Accent else FK.Text, modifier = Modifier.size(20.dp))
+                        tint = if (dictating) FK.Accent else FK.Text, modifier = Modifier.size(18.dp))
                 }
                 val canSend = (text.isNotBlank() || ui.pending.isNotEmpty()) && !ui.importing
                 SendButton(
@@ -1171,9 +1188,9 @@ private fun InputBar(
 private fun extra(text: String) = if (text.isNotBlank()) "\nZusätzliche Hinweise: $text" else ""
 
 @Composable
-private fun SendButton(icon: ImageVector, label: String, enabled: Boolean, size: Dp = 38.dp, onClick: () -> Unit) {
+private fun SendButton(icon: ImageVector, label: String, enabled: Boolean, size: Dp = 36.dp, onClick: () -> Unit) {
     Box(
         Modifier.size(size).clip(CircleShape).background(if (enabled) androidx.compose.ui.graphics.Color.White else FK.Surface3).clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) { Icon(icon, label, tint = androidx.compose.ui.graphics.Color.Black, modifier = Modifier.size(22.dp)) }
+    ) { Icon(icon, label, tint = androidx.compose.ui.graphics.Color.Black, modifier = Modifier.size(18.dp)) }
 }

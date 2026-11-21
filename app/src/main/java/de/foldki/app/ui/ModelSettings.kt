@@ -3,6 +3,9 @@ package de.foldki.app.ui
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,7 +48,7 @@ import de.foldki.app.data.Settings
  * Hugging Face, import own files, delete, CPU test switch. Only the chosen model answers – nothing jumps in.
  * Stacked, full width – works folded (cover screen) and unfolded.
  */
-@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openNano: () -> Unit) {
     var confirmDelete by remember { mutableStateOf<LocalModelManager.LocalModel?>(null) }
@@ -56,146 +59,116 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.importModel(uri) }
     val busy = st is State.Downloading || st is State.Verifying || st is State.Importing
 
-    // Memory card (like the mock-up): free RAM decides whether a model can start.
+    PageAction { Cta("Importieren", ghost = true, enabled = !busy) { vm.clearModelError(); pick.launch(arrayOf("*/*")) } }
+    // Exactly like mock-up 3 (design/3-modelle.png): memory card, switch, model cards.
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    val avail = remember(ui.localModels, ui.backend) {
+    val avail = remember(ui.localModels, ui.backend, ui.activeModel) {
         runCatching {
             val am = ctx.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
             android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }.availMem
         }.getOrDefault(0L)
     }
-    Card {
+    Card(Modifier.padding(bottom = 12.dp)) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Text("Arbeitsspeicher", fontSize = 17.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, color = FK.Text, modifier = Modifier.weight(1f))
+            Text("Arbeitsspeicher", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f))
             val ok = avail > 3_000_000_000L
             Pill(if (ok) "Gut" else "Knapp", if (ok) FK.Ok else FK.Warn)
         }
-        if (ram > 0) {
-            Spacer(Modifier.height(10.dp))
-            LinearProgressIndicator(
-                progress = { (1f - avail.toFloat() / ram).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(8.dp),
-                color = FK.Ok, trackColor = FK.Surface3,
+        Box(Modifier.padding(top = 10.dp, bottom = 8.dp).fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(FK.Surface3)) {
+            if (ram > 0) Box(
+                Modifier.fillMaxWidth((1f - avail.toFloat() / ram).coerceIn(0f, 1f)).height(8.dp).clip(RoundedCornerShape(4.dp))
+                    .background(androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(FK.Ok, androidx.compose.ui.graphics.Color(0xFF34C759)))),
             )
         }
-        Spacer(Modifier.height(8.dp))
         Row {
             Text("Frei: ", fontSize = 13.sp, color = FK.Muted)
-            Text(LocalModelManager.gb(avail), fontSize = 13.sp, color = FK.Ok, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            if (ram > 0) Text("${"%.0f".format(java.util.Locale.GERMANY, ram / 1e9)} GB gesamt · Speicher frei ${LocalModelManager.gb(free)}", fontSize = 13.sp, color = FK.Muted)
+            Text(LocalModelManager.gb(avail), fontSize = 13.sp, color = FK.Ok, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            if (ram > 0) Text("${"%.0f".format(java.util.Locale.GERMANY, ram / 1e9)} GB gesamt", fontSize = 13.sp, color = FK.Muted)
         }
     }
-    Note("Es antwortet nur das gewählte Modell – kein anderes springt ein.", Modifier.padding(horizontal = 6.dp, vertical = 8.dp))
+    Segmented(listOf("Auf dem Handy", "Erkunden"), 0, Modifier.padding(bottom = 14.dp)) { if (it == 1) openBrowser() }
 
-    Segmented(listOf("Auf dem Handy", "Erkunden"), 0, Modifier.padding(top = 4.dp, bottom = 4.dp)) { if (it == 1) openBrowser() }
-    SectionLabel("Modelle")
+    // Download / import in progress (only while something happens).
+    when (st) {
+        is State.Downloading -> Card(Modifier.padding(bottom = 12.dp)) {
+            Text("Lädt ${HfModels.displayName(st.name)} … ${st.pct} %", fontSize = 15.sp, color = FK.Text)
+            LinearProgressIndicator(progress = { st.pct / 100f }, modifier = Modifier.padding(vertical = 10.dp).fillMaxWidth(), color = FK.Accent, trackColor = FK.Surface3)
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text("${LocalModelManager.gb(st.bytes)} von ${LocalModelManager.gb(st.total)}", fontSize = 13.sp, color = FK.Muted, modifier = Modifier.weight(1f))
+                Cta("Abbrechen", ghost = true) { vm.cancelModelOp() }
+            }
+        }
+        is State.Verifying -> Card(Modifier.padding(bottom = 12.dp)) { Text("Prüfe die Datei (Größe, SHA-256) … ${st.pct} %", fontSize = 15.sp, color = FK.Text) }
+        is State.Importing -> Card(Modifier.padding(bottom = 12.dp)) {
+            Text("Importiere ${st.name} … ${st.pct} %", fontSize = 15.sp, color = FK.Text)
+            Row(Modifier.padding(top = 10.dp)) { Spacer(Modifier.weight(1f)); Cta("Abbrechen", ghost = true) { vm.cancelModelOp() } }
+        }
+        is State.Failed -> Card(Modifier.padding(bottom = 12.dp)) { Text(st.message, fontSize = 14.sp, color = FK.Danger) }
+        State.Idle -> Unit
+    }
+
     ui.localModels.forEach { m ->
         val active = ui.activeModel == m.file
-        val crashed = vm.settings.llmCrashed == m.file
         val gguf = HfModels.isGguf(m.file)
-        Card(Modifier.padding(bottom = 12.dp).clickable { vm.selectModel(m.file) }, border = if (active) FK.Ok else null) {
+        val gemma = m.file.lowercase().startsWith("gemma")
+        val gpuOk = !gguf && (gemma || HfModels.isGpuFile(m.file))
+        val thinking = HfModels.isThinking(m.file)
+        val crashed = vm.settings.llmCrashed == m.file
+        Card(
+            Modifier.padding(bottom = 12.dp).combinedClickable(onClick = { vm.selectModel(m.file) }, onLongClick = { confirmDelete = m }, onLongClickLabel = "Löschen"),
+            border = if (active) FK.Ok else null,
+        ) {
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                ModelLogo(HfModels.vendorOf(m.file), 36.dp)
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(m.name, fontSize = 17.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, color = FK.Text, maxLines = 2)
-                    Text(HfModels.vendorOf(m.file) + " · " + m.source, fontSize = 13.sp, color = FK.Muted, maxLines = 1)
+                Text(m.name, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f), maxLines = 2)
+                when {
+                    active -> Pill("Aktiv", FK.Ok)
+                    gguf -> Pill("GGUF", FK.Warn)
+                    gpuOk -> Pill("GPU", FK.Accent)
+                    else -> Pill("Prozessor", FK.Muted)
                 }
-                if (active) Pill("Aktiv", FK.Ok)
             }
-            androidx.compose.foundation.layout.FlowRow(Modifier.padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (gguf) Pill("GGUF · llama.cpp", FK.Warn) else Pill("LiteRT", FK.Muted)
-                if (!gguf && (HfModels.isGpuFile(m.file) || m.file.lowercase().startsWith("gemma"))) Pill("GPU", FK.Accent)
-                if (gguf) Pill("GPU ${vm.settings.gpuPercent} %", FK.Accent)
-                if (HfModels.isThinking(m.file)) Pill("Denken", FK.Purple)
-                if (crashed) Pill("hat die App beendet", FK.Danger)
+            Text(
+                when {
+                    m.file == LocalModelManager.GEMMA_FILE -> "Google · schnell und sparsam"
+                    gguf -> (if (m.source == "Import") "Importiert" else m.source) + " · llama.cpp"
+                    thinking -> "Denkt nach vor der Antwort"
+                    else -> HfModels.vendorOf(m.file) + " · " + m.source
+                },
+                fontSize = 13.sp, color = FK.Muted, modifier = Modifier.padding(top = 4.dp), maxLines = 1,
+            )
+            val tags = buildList {
+                if (active && gpuOk) add("GPU" to FK.Accent)
+                if (gemma) { add("Bilder" to FK.Muted); add("Werkzeuge" to FK.Muted) }
+                if (thinking) add("Denken" to FK.Purple)
+                if (crashed) add("hat die App beendet" to FK.Danger)
+                if (!gguf) add("LiteRT" to FK.Muted)
             }
+            if (tags.isNotEmpty()) androidx.compose.foundation.layout.FlowRow(
+                Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) { tags.forEach { (t, c) -> Pill(t, c) } }
             Row(Modifier.padding(top = 12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                Text(LocalModelManager.gb(m.size), fontSize = 13.sp, color = FK.Muted, modifier = Modifier.weight(1f))
-                if (!active) Text("Wählen", color = androidx.compose.ui.graphics.Color.White, fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                    modifier = Modifier.clip(RoundedCornerShape(18.dp)).background(FK.Accent).clickable { vm.selectModel(m.file) }.padding(horizontal = 16.dp, vertical = 7.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Löschen", color = FK.Danger, fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                    modifier = Modifier.clip(RoundedCornerShape(18.dp)).background(FK.Surface2).clickable { confirmDelete = m }.padding(horizontal = 16.dp, vertical = 7.dp))
-            }
-        }
-    }
-    Card(Modifier.padding(bottom = 4.dp).clickable { vm.selectModel(Settings.NANO); if (!ui.nanoReady) openNano() }, border = if (ui.usesNano) FK.Ok else null) {
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            ModelLogo("Google", 36.dp)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text("Gemini Nano", fontSize = 17.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, color = FK.Text)
-                Text(if (ui.usesNano) "im Handy eingebaut · " + ui.nanoStatus else "im Handy eingebaut (AICore)", fontSize = 13.sp, color = FK.Muted, maxLines = 2)
-            }
-            if (ui.usesNano) Pill("Aktiv", FK.Ok)
-        }
-    }
-
-    SectionLabel("Herunterladen")
-    Group {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            when (st) {
-                is State.Downloading -> {
-                    Text("Lädt ${HfModels.displayName(st.name)}… ${st.pct} % (${LocalModelManager.gb(st.bytes)} von ${LocalModelManager.gb(st.total)})", fontSize = 13.sp, color = FK.Text)
-                    LinearProgressIndicator(progress = { st.pct / 100f }, modifier = Modifier.fillMaxWidth(), color = FK.Accent, trackColor = FK.Line)
-                    FkButton("Abbrechen", ghost = true) { vm.cancelModelOp() }
-                    Note("Geht über WLAN und Mobilfunk. Der Download läuft auch weiter, wenn die App zu ist.")
-                }
-                is State.Verifying -> {
-                    Text("Prüfe die Datei (Größe, SHA-256)… ${st.pct} %", fontSize = 13.sp, color = FK.Text)
-                    LinearProgressIndicator(progress = { st.pct / 100f }, modifier = Modifier.fillMaxWidth(), color = FK.Accent, trackColor = FK.Line)
-                }
-                is State.Importing -> {
-                    Text("Importiere ${st.name}… ${st.pct} %", fontSize = 13.sp, color = FK.Text)
-                    LinearProgressIndicator(progress = { st.pct / 100f }, modifier = Modifier.fillMaxWidth(), color = FK.Accent, trackColor = FK.Line)
-                    FkButton("Abbrechen", ghost = true) { vm.cancelModelOp() }
-                }
-                is State.Failed -> Text(st.message, fontSize = 13.sp, color = androidx.compose.ui.graphics.Color(0xFFF2B8B5))
-                State.Idle -> Unit
-            }
-            if (!busy) {
-                if (ui.localModels.none { it.file == LocalModelManager.GEMMA_FILE }) {
-                    FkButton("Gemma 4 E2B laden (${LocalModelManager.gb(LocalModelManager.GEMMA_SIZE)})") {
-                        vm.clearModelError(); vm.downloadModel(LocalModelManager.GEMMA)
-                    }
-                }
-                FkButton("Modelle durchsuchen (passend zur App)", ghost = true) { vm.clearModelError(); openBrowser() }
-                FkButton("Eigene .litertlm importieren", ghost = true) { vm.clearModelError(); pick.launch(arrayOf("*/*")) }
-                Note("Es laufen .litertlm (LiteRT-LM, GPU) und .gguf (llama.cpp, auch Dateien aus LM Studio). .task geht nicht. Empfohlen: 4-Bit bis ca. 3–4 GB.")
-            }
-        }
-    }
-
-    if (ui.localModels.any { HfModels.isGguf(it.file) }) {
-        SectionLabel("GGUF (llama.cpp)")
-        Group {
-            var pct by remember { mutableStateOf(vm.settings.gpuPercent.toFloat()) }
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                Row {
-                    Text("GPU-Anteil", fontSize = 16.sp, color = FK.Text, modifier = Modifier.weight(1f))
-                    Text(if (pct.toInt() == 0) "nur Prozessor" else "${pct.toInt()} %", fontSize = 15.sp, color = FK.Muted)
-                }
-                androidx.compose.material3.Slider(
-                    value = pct, onValueChange = { pct = (it / 5).toInt() * 5f }, valueRange = 0f..100f,
-                    onValueChangeFinished = { vm.setGpuPercent(pct.toInt()) },
-                    colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = androidx.compose.ui.graphics.Color.White, activeTrackColor = FK.Accent, inactiveTrackColor = FK.Surface3),
+                Text(
+                    LocalModelManager.gb(m.size) + if (gguf) " · GPU-Anteil ${vm.settings.gpuPercent} %"
+                        else " · braucht ~${"%.0f".format(java.util.Locale.GERMANY, kotlin.math.ceil(m.size * 1.15 / 1e9))} GB RAM",
+                    fontSize = 13.sp, color = FK.Muted, modifier = Modifier.weight(1f),
                 )
-                Note("Anteil der Modell-Schichten auf dem Adreno-Grafikprozessor (OpenCL). Startwert 75 %.")
+                if (active) Cta("Löschen", ghost = true) { confirmDelete = m } else Cta("Laden") { vm.selectModel(m.file) }
             }
         }
     }
-
-    SectionLabel("Rechenart")
-    Group {
-        var cpu by remember { mutableStateOf(vm.settings.gemmaBackend == "CPU") }
-        SettingRow(
-            "Auf CPU rechnen (Test)",
-            if (cpu) "An: Modelle rechnen auf dem Prozessor" else "Aus: zuerst GPU, nur wenn das Modell dort nicht startet die CPU" +
-                (ui.backend.ifBlank { null }?.let { " · läuft gerade: $it" } ?: ""),
-            leading = { Tile(Icons.Default.Memory, FK.T6) },
-        ) { FkToggle(cpu, { cpu = it; vm.setCpu(it) }) }
+    // Gemini Nano: built into the phone, same card style.
+    Card(Modifier.padding(bottom = 12.dp).clickable { vm.selectModel(Settings.NANO); if (!ui.nanoReady) openNano() }, border = if (ui.usesNano) FK.Ok else null) {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text("Gemini Nano", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f))
+            if (ui.usesNano) Pill("Aktiv", FK.Ok) else Pill("AICore", FK.Muted)
+        }
+        Text("Google · im Handy eingebaut", fontSize = 13.sp, color = FK.Muted, modifier = Modifier.padding(top = 4.dp))
+        Row(Modifier.padding(top = 12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text(if (ui.usesNano) ui.nanoStatus else "kein Download nötig", fontSize = 13.sp, color = FK.Muted, modifier = Modifier.weight(1f), maxLines = 2)
+            if (!ui.usesNano) Cta("Laden") { vm.selectModel(Settings.NANO); if (!ui.nanoReady) openNano() }
+        }
     }
-    Spacer(Modifier.height(8.dp))
+    if (ui.localModels.isEmpty()) Sub("Noch kein Modell auf dem Handy – unter „Erkunden“ eins laden oder oben rechts importieren.")
 
     confirmDelete?.let { m ->
         AlertDialog(

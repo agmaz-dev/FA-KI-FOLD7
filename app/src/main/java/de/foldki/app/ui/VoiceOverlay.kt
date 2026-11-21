@@ -43,6 +43,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -63,8 +65,9 @@ private enum class Phase { LISTENING, TRANSCRIBING, THINKING, SPEAKING, PAUSED }
 
 /** Full-screen voice conversation: listen → ask the AI → read the answer aloud → listen again. */
 @Composable
-fun VoiceOverlay(ui: UiState, vm: ChatViewModel, voice: VoiceController, onClose: () -> Unit) {
+fun VoiceOverlay(ui: UiState, vm: ChatViewModel, voice: VoiceController, onClose: () -> Unit, onSettings: () -> Unit = {}) {
     var phase by remember { mutableStateOf(Phase.PAUSED) }
+    var heard by remember { mutableStateOf("") }
     var info by remember { mutableStateOf("") }
     var level by remember { mutableFloatStateOf(0f) }
     // Every start/stop gets a new turn; late callbacks of an older turn are ignored (no double start).
@@ -78,7 +81,7 @@ fun VoiceOverlay(ui: UiState, vm: ChatViewModel, voice: VoiceController, onClose
                 if (turn == my) {
                     level = 0f
                     if (t.isBlank()) { phase = Phase.PAUSED; info = "Nichts verstanden – tippe zum Sprechen." }
-                    else { phase = Phase.THINKING; vm.send(t, voice = true) }
+                    else { heard = t; phase = Phase.THINKING; vm.send(t, voice = true) }
                 }
             },
             onError = { msg -> if (turn == my) { level = 0f; phase = Phase.PAUSED; info = msg } },
@@ -126,19 +129,35 @@ fun VoiceOverlay(ui: UiState, vm: ChatViewModel, voice: VoiceController, onClose
     }
     val scale by animateFloatAsState(target, label = "scale")
 
-    Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
-        Column(
-            Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                "Sprachmodus · " + ui.activeName,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp,
-            )
+    // Exactly like mock-up 14: ✕ / voice + model / ⚙ on top, pink orb in the middle, 🎙 and red ✕ below.
+    val voiceName = if (vm.settings.stVoice == "caleb") "Caleb" else "Tessa"
+    Box(
+        Modifier.fillMaxSize().background(FK.Bg)
+            .background(androidx.compose.ui.graphics.Brush.radialGradient(
+                listOf(androidx.compose.ui.graphics.Color(0x59FF375F), androidx.compose.ui.graphics.Color.Transparent),
+                center = androidx.compose.ui.geometry.Offset.Unspecified, radius = 900f,
+            )),
+    ) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                NavBtn(Icons.Default.Close, "Sprachmodus beenden") { stopAll(); onClose() }
+                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(voiceName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = FK.Text)
+                    Text(ui.activeName + " · " + if (ui.activeServer != null) "WLAN" else "offline", fontSize = 12.sp, color = FK.Muted, maxLines = 1)
+                }
+                Box(Modifier.size(36.dp).clip(CircleShape).background(FK.Surface).clickable { stopAll(); onSettings() }, contentAlignment = Alignment.Center) {
+                    Text("⚙︎", fontSize = 18.sp, color = FK.Text)
+                }
+            }
             Spacer(Modifier.weight(1f))
             Box(
-                Modifier.size(200.dp).scale(scale).clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary.copy(alpha = if (phase == Phase.PAUSED) 0.4f else 0.9f))
+                Modifier.size(180.dp).scale(scale)
+                    .shadow(60.dp, CircleShape, ambientColor = androidx.compose.ui.graphics.Color(0xFFFF375F), spotColor = androidx.compose.ui.graphics.Color(0xFFFF375F))
+                    .clip(CircleShape)
+                    .background(androidx.compose.ui.graphics.Brush.radialGradient(
+                        0f to androidx.compose.ui.graphics.Color(0xFFFFB3C6), 0.45f to androidx.compose.ui.graphics.Color(0xFFFF375F), 0.9f to FK.Purple,
+                        center = androidx.compose.ui.geometry.Offset(170f, 140f), radius = 520f,
+                    ))
                     .clickable {
                         when (phase) {
                             Phase.LISTENING -> voice.stopListening() // done speaking: recognize and send
@@ -148,37 +167,31 @@ fun VoiceOverlay(ui: UiState, vm: ChatViewModel, voice: VoiceController, onClose
                         }
                     },
             )
-            Spacer(Modifier.height(32.dp))
             Text(
                 when (phase) {
-                    Phase.LISTENING -> "Ich höre zu…"
-                    Phase.TRANSCRIBING, Phase.THINKING -> "Denke nach…"
+                    Phase.LISTENING -> "Ich höre zu …"
+                    Phase.TRANSCRIBING -> "Erkenne …"
+                    Phase.THINKING -> "Denke nach …"
                     Phase.SPEAKING -> "Spreche – tippe zum Unterbrechen"
                     Phase.PAUSED -> "Tippe auf den Kreis zum Sprechen"
                 },
-                fontSize = 18.sp, fontFamily = FontFamily.Serif,
+                fontSize = 17.sp, color = FK.Muted, modifier = Modifier.padding(top = 44.dp),
             )
-            Spacer(Modifier.height(12.dp))
-            // No transcript in voice mode: neither the recognized words nor the answer as text
-            // (both stay in the chat). Only hints and errors are shown here.
-            Text(
-                info, textAlign = TextAlign.Center, maxLines = 4, overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.widthIn(max = 560.dp),
+            val line = if (info.isNotBlank()) info else if (heard.isNotBlank()) "„$heard“" else ""
+            if (line.isNotBlank()) Text(
+                line, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, textAlign = TextAlign.Center, maxLines = 4, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 10.dp, start = 30.dp, end = 30.dp).widthIn(max = 560.dp),
             )
             Spacer(Modifier.weight(1f))
-            Row(horizontalArrangement = Arrangement.spacedBy(40.dp), modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Spacer(Modifier.weight(1f))
-                FilledTonalIconButton(
-                    onClick = { if (phase == Phase.PAUSED) startListening() else stopAll() },
-                    modifier = Modifier.size(64.dp),
-                ) {
-                    if (phase == Phase.PAUSED) Icon(Icons.Default.Mic, "Sprechen")
-                    else Icon(Icons.Default.Stop, "Stopp")
-                }
-                FilledTonalIconButton(onClick = { stopAll(); onClose() }, modifier = Modifier.size(64.dp)) {
-                    Icon(Icons.Default.Close, "Sprachmodus beenden")
-                }
-                Spacer(Modifier.weight(1f))
+            Row(horizontalArrangement = Arrangement.spacedBy(40.dp), modifier = Modifier.padding(bottom = 60.dp)) {
+                Box(
+                    Modifier.size(64.dp).clip(CircleShape).background(FK.Surface2).clickable { if (phase == Phase.PAUSED) startListening() else stopAll() },
+                    contentAlignment = Alignment.Center,
+                ) { Text(if (phase == Phase.PAUSED || phase == Phase.LISTENING) "🎙" else "■", fontSize = 24.sp, color = FK.Text) }
+                Box(
+                    Modifier.size(64.dp).clip(CircleShape).background(FK.Danger).clickable { stopAll(); onClose() },
+                    contentAlignment = Alignment.Center,
+                ) { Text("✕", fontSize = 24.sp, color = androidx.compose.ui.graphics.Color.White) }
             }
         }
     }
