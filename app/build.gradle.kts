@@ -7,13 +7,16 @@ plugins {
 android {
     namespace = "de.foldki.app"
     compileSdk = 36
+    // NPU (Hexagon): the CI builds libggml-hexagon.so in the Snapdragon toolchain image and passes its NDK version,
+    // so llama.cpp, the NPU part and libc++_shared come from the same NDK. Local builds keep the default NDK.
+    providers.gradleProperty("foldki.ndk").orNull?.takeIf { it.isNotBlank() }?.let { ndkVersion = it }
 
     defaultConfig {
         applicationId = "de.foldki.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 48
-        versionName = "4.4"
+        versionCode = 49
+        versionName = "4.5"
         // Galaxy Z Fold7 and all current phones are 64-bit ARM; keeps the APK small.
         ndk { abiFilters += "arm64-v8a" }
         // GGUF models: llama.cpp (from FA Fold KI), always optimised, 16 KB pages, shared C++ runtime
@@ -59,6 +62,10 @@ android {
 
     buildFeatures { compose = true }
 
+    // NPU part (libggml-hexagon.so + DSP libraries libggml-htp-v73…v85.so), built by GitHub Actions into app/npu-libs.
+    // Missing folder (local build or failed NPU build) = APK without NPU; GPU/CPU work as before.
+    sourceSets["main"].jniLibs.srcDir("npu-libs")
+
     packaging {
         jniLibs {
             // Unpacked into nativeLibraryDir, so llama.cpp finds its compute parts (libggml-cpu.so, libggml-opencl.so).
@@ -66,6 +73,8 @@ android {
             // Only needed for linking: at runtime the phone's own OpenCL (/vendor/lib64/libOpenCL.so) must be used.
             excludes += "**/libOpenCL.so"
             pickFirsts += "**/libc++_shared.so"
+            // DSP code for the Hexagon NPU (not ARM): never strip, the NPU loads it as built.
+            keepDebugSymbols += "**/libggml-htp-*.so"
         }
         resources {
             excludes += setOf(

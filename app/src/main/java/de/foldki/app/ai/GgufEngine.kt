@@ -32,7 +32,9 @@ class GgufEngine(context: Context) {
         private set
     @Volatile var loadedGpu: Int = -1
         private set
-    /** "GPU 75 %" or "CPU" of the loaded model. */
+    @Volatile var loadedNpu: Boolean = false
+        private set
+    /** "GPU 75 %", "NPU" or "CPU" of the loaded model. */
     @Volatile var backendUsed: String? = null
         private set
     @Volatile var contextTokens: Int = N_CTX
@@ -44,31 +46,49 @@ class GgufEngine(context: Context) {
     /** Characters of input that safely fit next to an answer. */
     val inputBudgetChars: Int get() = ((contextTokens - MAX_ANSWER_TOKENS / 2) * 2.5).toInt().coerceAtLeast(1000)
 
-    /** Loads [path] with [gpuPercent] % of the layers on the GPU. Returns "GPU x %" or "CPU". */
-    fun loadAsync(path: String, gpuPercent: Int): Deferred<String> = synchronized(this) {
+    /** true = the NPU part (Hexagon) is in this APK. */
+    fun npuBuilt(): Boolean = LlamaNative.available &&
+        runCatching { LlamaNative.nativeNpuBuilt(app.applicationInfo.nativeLibraryDir.orEmpty()) }.getOrDefault(false)
+
+    /** Loads [path] with [gpuPercent] % of the layers on the GPU, or with [npu] all layers on the NPU. Returns "GPU x %", "NPU" or "CPU". */
+    fun loadAsync(path: String, gpuPercent: Int, npu: Boolean = false): Deferred<String> = synchronized(this) {
         loading?.takeIf { it.isActive }?.let { return it }
         loadScope.async {
             loadMutex.withLock {
-                if (loadedPath == path && loadedGpu == gpuPercent) return@withLock backendUsed ?: "CPU"
+                if (loadedPath == path && loadedGpu == gpuPercent && loadedNpu == npu) return@withLock backendUsed ?: "CPU"
                 if (!LlamaNative.available) throw IllegalStateException("llama.cpp fehlt in dieser APK: ${LlamaNative.loadError}")
                 if (!backendsReady) { LlamaNative.nativeInit(app.applicationInfo.nativeLibraryDir.orEmpty()); backendsReady = true }
                 genMutex.withLock {
-                    if (loadedPath != null) { LlamaNative.nativeUnload(); loadedPath = null; loadedGpu = -1; backendUsed = null }
+                    if (loadedPath != null) { LlamaNative.nativeUnload(); loadedPath = null; loadedGpu = -1; loadedNpu = false; backendUsed = null }
                     val threads = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4)
-                    if (!LlamaNative.nativeLoad(path, N_CTX, threads, gpuPercent.coerceIn(0, 100))) {
+                    if (!LlamaNative.nativeLoad(path, N_CTX, threads, gpuPercent.coerceIn(0, 100), npu)) {
+                        if (npu) { lastNpuReport = LlamaNative.nativeNpuReport().trim(); de.foldki.app.data.DebugLog.write("NPU-Bericht:\n$lastNpuReport") }
                         throw IllegalStateException(LlamaNative.nativeError().ifBlank { "GGUF-Modell konnte nicht geladen werden." })
                     }
                     contextTokens = LlamaNative.nativeContextSize().takeIf { it > 0 } ?: N_CTX
                     loadedPath = path
                     loadedGpu = gpuPercent
+                    loadedNpu = npu
                     val info = LlamaNative.nativeBackendInfo()
-                    backendUsed = if (info.startsWith("Nur Prozessor") || gpuPercent == 0) "CPU" else "GPU $gpuPercent %"
+                    backendUsed = when {
+                        info.startsWith("NPU") -> "NPU"
+                        info.startsWith("Nur Prozessor") || (!npu && gpuPercent == 0) -> "CPU"
+                        else -> "GPU $gpuPercent %"
+                    }
                     de.foldki.app.data.DebugLog.write("GGUF geladen: ${path.substringAfterLast('/')} · $info")
+                    if (npu) {
+                        lastNpuReport = LlamaNative.nativeNpuReport().trim()
+                        de.foldki.app.data.DebugLog.write("NPU-Bericht:\n$lastNpuReport")
+                    }
                     backendUsed!!
                 }
             }
         }.also { loading = it }
     }
+
+    /** Report of the last load with NPU (for the Fehlerbericht and the NPU page). */
+    @Volatile var lastNpuReport: String = ""
+        private set
 
     /**
      * Chat answer, raw text (thinking included). [system] blank = no system message. [maxTokens] 0 = [MAX_ANSWER_TOKENS].
@@ -123,7 +143,7 @@ class GgufEngine(context: Context) {
     fun close() {
         synchronized(this) { loading?.cancel(); loading = null }
         loadScope.launch {
-            genMutex.withLock { if (loadedPath != null) { runCatching { LlamaNative.nativeUnload() }; loadedPath = null; loadedGpu = -1; backendUsed = null } }
+            genMutex.withLock { if (loadedPath != null) { runCatching { LlamaNative.nativeUnload() }; loadedPath = null; loadedGpu = -1; loadedNpu = false; backendUsed = null } }
         }
     }
 

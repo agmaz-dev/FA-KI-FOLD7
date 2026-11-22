@@ -20,6 +20,8 @@
         <!-- GPU backend of Gemma (LiteRT-LM); optional, the CPU is used if the phone does not offer them. -->
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <!-- NPU (Hexagon) for GGUF models: FastRPC driver of the phone; optional, without it the NPU is simply not offered. -->
+        <uses-native-library android:name="libcdsprpc.so" android:required="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

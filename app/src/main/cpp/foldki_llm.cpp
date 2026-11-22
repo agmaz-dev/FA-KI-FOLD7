@@ -3,12 +3,17 @@
 // eigene JNI-Namen (de.foldki.app.ai.LlamaNative), Kontext bis 8192, Ausgabe bis 4000 Tokens,
 // Sampler-Werte pro Aufruf, "Denken" an/aus für Thinking-Modelle (Qwen3 & Co.).
 #include <jni.h>
+#include <dlfcn.h>
+#include <android/log.h>
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <mutex>
+#include <set>
 #include <string>
 #include <vector>
 #include <cstring>
+#include <unistd.h>
 
 #include "llama.h"
 #include "chat.h"
@@ -27,6 +32,59 @@ static std::string g_err;
 static std::string g_backend_info;   // z. B. "GPU (QUALCOMM Adreno(TM) 830): 27 von 36 Schichten"
 static std::mutex g_info_mu;          // eigenes Schloss: die Anzeige darf nicht auf eine laufende Antwort warten
 static bool g_backends_loaded = false;
+static std::string g_lib_dir;         // nativeLibraryDir der App (dort liegen alle libggml-*.so)
+
+// ---- NPU (Hexagon) ----
+// Der NPU-Teil (libggml-hexagon.so + libggml-htp-v79.so u. a.) wird nur geladen, wenn "NPU" gewählt ist.
+// Die NPU meldet sich bei llama.cpp als "GPU"-Gerät; deshalb werden die Geräte immer ausdrücklich gewählt.
+static bool g_hex_tried = false;
+static ggml_backend_dev_t g_hex_dev = nullptr;
+static int *g_hex_verbose = nullptr;  // opt_verbose im NPU-Teil: nur beim Laden an, damit abgelehnte Rechenschritte sichtbar werden
+static std::mutex g_npu_mu;
+static std::string g_npu_log;         // Zeilen "ggml-hex: …" (Arch-Version, Fehler) für den Fehlerbericht
+static std::set<std::string> g_npu_rejected;   // Rechenschritte, die die NPU abgelehnt hat (laufen auf dem Prozessor)
+static std::string g_log_line;
+static ggml_log_level g_log_level = GGML_LOG_LEVEL_INFO;
+static bool g_npu_collect = false;
+
+// Alle Meldungen von llama.cpp/ggml: Warnungen und NPU-Zeilen ins Android-Log, NPU-Zeilen zusätzlich in den Bericht.
+static void log_cb(ggml_log_level level, const char *text, void *) {
+    if (!text) return;
+    std::lock_guard<std::mutex> lk(g_npu_mu);
+    if (level != GGML_LOG_LEVEL_CONT && g_log_line.empty()) g_log_level = level;
+    level = g_log_level;
+    g_log_line += text;
+    size_t nl;
+    while ((nl = g_log_line.find('\n')) != std::string::npos) {
+        std::string line = g_log_line.substr(0, nl);
+        g_log_line.erase(0, nl + 1);
+        bool hex = line.find("ggml-hex") != std::string::npos;
+        if (hex) {
+            size_t p = line.find("supports-op ");
+            if (p != std::string::npos) {
+                // "ggml-hex: HTP0 supports-op <OP>…|no" -> nur den Namen des Rechenschritts merken
+                if (g_npu_collect && line.size() >= 3 && line.compare(line.size() - 3, 3, "|no") == 0 && g_npu_rejected.size() < 64) {
+                    std::string op = line.substr(p + 12);
+                    size_t e = op.find_first_of(" :|(");
+                    g_npu_rejected.insert(e == std::string::npos ? op : op.substr(0, e));
+                }
+                continue;   // sehr viele Zeilen, nicht einzeln protokollieren
+            }
+            if (line.find("execute-op") != std::string::npos || line.find("device-supports-buft") != std::string::npos) continue;
+            if (g_npu_log.size() < 12000) g_npu_log += line + "\n";
+        }
+        if (hex || level >= GGML_LOG_LEVEL_WARN) {
+            __android_log_print(level >= GGML_LOG_LEVEL_ERROR ? ANDROID_LOG_ERROR : level >= GGML_LOG_LEVEL_WARN ? ANDROID_LOG_WARN : ANDROID_LOG_INFO,
+                                "FoldKI-llama", "%s", line.c_str());
+        }
+    }
+    if (g_log_line.size() > 4096) g_log_line.clear();
+}
+
+static void npu_note(const std::string &s) {
+    std::lock_guard<std::mutex> lk(g_npu_mu);
+    if (g_npu_log.size() < 12000) g_npu_log += s + "\n";
+}
 
 static void free_all() {
     if (g_ctx) { llama_free(g_ctx); g_ctx = nullptr; }
@@ -74,19 +132,90 @@ static std::string cpu_flags() {
 }
 
 // Rechenteile laden (libggml-cpu.so, libggml-opencl.so). Fehlt OpenCL auf dem Gerät, bleibt nur der Prozessor.
+// Der NPU-Teil wird hier bewusst NICHT geladen (nur bei Wahl "NPU", siehe load_hexagon).
 static void load_backends(const std::string &libDir) {
+    if (!libDir.empty()) g_lib_dir = libDir;
     if (g_backends_loaded) return;
-    if (!libDir.empty()) ggml_backend_load_all_from_path(libDir.c_str());
-    // Ersatz, falls die Bibliotheken nicht entpackt im Ordner liegen: über den Namen direkt aus der APK
-    if (!ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU)) ggml_backend_load("libggml-cpu.so");
-    if (!ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU)) ggml_backend_load("libggml-opencl.so");
+    llama_log_set(log_cb, nullptr);
+    for (const char *name : {"libggml-cpu.so", "libggml-opencl.so"}) {
+        bool ok = false;
+        if (!g_lib_dir.empty()) ok = ggml_backend_load((g_lib_dir + "/" + name).c_str()) != nullptr;
+        // Ersatz, falls die Bibliotheken nicht entpackt im Ordner liegen: über den Namen direkt aus der APK
+        if (!ok) ggml_backend_load(name);
+    }
     llama_backend_init();
     g_backends_loaded = true;
 }
 
+// Die Grafikkarte (Adreno über OpenCL) – ausdrücklich über den Namen, weil sich auch die NPU als "GPU" meldet.
+static ggml_backend_dev_t opencl_dev() {
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t d = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_type(d) != GGML_BACKEND_DEVICE_TYPE_GPU) continue;
+        ggml_backend_reg_t r = ggml_backend_dev_backend_reg(d);
+        if (r && strcmp(ggml_backend_reg_name(r), "OpenCL") == 0) return d;
+    }
+    return nullptr;
+}
+
 static const char *gpu_name() {
-    ggml_backend_dev_t d = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+    ggml_backend_dev_t d = opencl_dev();
     return d ? ggml_backend_dev_description(d) : nullptr;
+}
+
+static std::string npu_lib_path() { return g_lib_dir.empty() ? std::string() : g_lib_dir + "/libggml-hexagon.so"; }
+
+static bool file_exists(const std::string &p) { return !p.empty() && access(p.c_str(), F_OK) == 0; }
+
+// NPU-Teil einmal laden: Suchpfad für die DSP-Bibliothek (libggml-htp-v79.so) auf den App-Ordner setzen,
+// dann libggml-hexagon.so laden und das Gerät HTP0 holen. nullptr = NPU nicht nutzbar (Grund steht im Bericht).
+static ggml_backend_dev_t load_hexagon() {
+    if (g_hex_tried) return g_hex_dev;
+    g_hex_tried = true;
+    std::string path = npu_lib_path();
+    if (!file_exists(path)) { npu_note("NPU: libggml-hexagon.so fehlt in dieser APK (NPU-Bau in GitHub Actions fehlgeschlagen?)"); return nullptr; }
+    std::string adsp = g_lib_dir + ";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/vendor/dsp;/dsp";
+    setenv("ADSP_LIBRARY_PATH", adsp.c_str(), 1);
+    setenv("GGML_HEXAGON_LIBHTP_DIR", g_lib_dir.c_str(), 1);
+    setenv("GGML_HEXAGON_OPPOLL", "1", 0);   // wie scripts/snapdragon/run.py
+    npu_note("NPU: ADSP_LIBRARY_PATH = " + g_lib_dir);
+    ggml_backend_reg_t reg = ggml_backend_load(path.c_str());
+    if (!reg) {
+        void *h = dlopen("libcdsprpc.so", RTLD_NOW | RTLD_LOCAL);
+        npu_note(std::string("NPU: Hexagon-Teil ließ sich nicht starten. libcdsprpc.so: ") + (h ? "erreichbar" : (dlerror() ?: "nicht erreichbar")));
+        if (h) dlclose(h);
+        return nullptr;
+    }
+    for (size_t i = 0; i < ggml_backend_reg_dev_count(reg); i++) {
+        ggml_backend_dev_t d = ggml_backend_reg_dev_get(reg, i);
+        if (d && strncmp(ggml_backend_dev_name(d), "HTP0", 4) == 0) { g_hex_dev = d; break; }
+    }
+    if (!g_hex_dev && ggml_backend_reg_dev_count(reg) > 0) g_hex_dev = ggml_backend_reg_dev_get(reg, 0);
+    if (!g_hex_dev) { npu_note("NPU: kein Gerät HTP0 gefunden"); return nullptr; }
+    npu_note(std::string("NPU: Gerät ") + ggml_backend_dev_name(g_hex_dev) + " (" + ggml_backend_dev_description(g_hex_dev) + ")");
+    if (void *h = dlopen(path.c_str(), RTLD_NOW | RTLD_NOLOAD)) {
+        g_hex_verbose = (int *) dlsym(h, "opt_verbose");
+        dlclose(h);   // bleibt geladen (ggml hält die Bibliothek)
+    }
+    return g_hex_dev;
+}
+
+static void npu_verbose(bool on) {
+    std::lock_guard<std::mutex> lk(g_npu_mu);
+    g_npu_collect = on;
+    if (g_hex_verbose) *g_hex_verbose = on ? 1 : 0;
+}
+
+// "general.file_type" der GGUF-Datei (2 = Q4_0). -1 = unbekannt.
+static int gguf_ftype(const std::string &path) {
+    gguf_init_params gp = {/*no_alloc*/ true, /*ctx*/ nullptr};
+    gguf_context *g = gguf_init_from_file(path.c_str(), gp);
+    if (!g) return -1;
+    int t = -1;
+    int64_t k = gguf_find_key(g, "general.file_type");
+    if (k >= 0) t = (int) gguf_get_val_u32(g, k);
+    gguf_free(g);
+    return t;
 }
 
 // Anzahl der Schichten aus der GGUF-Datei ("<arch>.block_count"), ohne das Modell zu laden. 0 = unbekannt.
@@ -119,35 +248,19 @@ Java_de_foldki_app_ai_LlamaNative_nativeBackendInfo(JNIEnv *env, jclass) {
     return env->NewStringUTF(s.c_str());
 }
 
-// gpuPercent: Anteil der Schichten auf der GPU (0 = nur Prozessor, 100 = alles). Klappt das Laden mit GPU nicht,
-// wird automatisch nur mit dem Prozessor geladen.
-extern "C" JNIEXPORT jboolean JNICALL
-Java_de_foldki_app_ai_LlamaNative_nativeLoad(JNIEnv *env, jclass, jstring jpath, jint nCtx, jint nThreads, jint gpuPercent) {
-    std::lock_guard<std::mutex> lk(g_mu);
-    free_all();
-    g_err.clear();
-    { std::lock_guard<std::mutex> il(g_info_mu); g_backend_info.clear(); }
-    load_backends("");
-    std::string path = jstr(env, jpath);
-    const char *gpu = gpu_name();
-    int layers = gguf_layers(path);
-    int pct = std::max(0, std::min(100, (int) gpuPercent));
-    int ngl = 0;
-    if (gpu && pct > 0) {
-        if (layers <= 0) ngl = pct >= 100 ? 999 : 0;   // Schichtzahl unbekannt: nur bei 100 % auf die GPU
-        else if (pct >= 100) ngl = layers + 1;          // + Ausgabeschicht
-        else ngl = std::max(1, (int) ((layers * pct + 50) / 100));
-    }
+// Nur die Geräte, die wir wollen (NPU ODER Grafikkarte ODER keines = nur Prozessor). Leere Liste = nur Prozessor.
+static std::vector<ggml_backend_dev_t> g_devs;
+static llama_model *load_model(const std::string &path, ggml_backend_dev_t dev, int ngl) {
+    g_devs.clear();
+    if (dev && ngl > 0) g_devs.push_back(dev);
+    g_devs.push_back(nullptr);
     llama_model_params mp = llama_model_default_params();
-    mp.n_gpu_layers = ngl;
-    g_model = llama_model_load_from_file(path.c_str(), mp);
-    if (!g_model && ngl > 0) {
-        // GPU hat nicht geklappt: wie bisher nur mit dem Prozessor
-        ngl = 0;
-        mp.n_gpu_layers = 0;
-        g_model = llama_model_load_from_file(path.c_str(), mp);
-    }
-    if (!g_model) { g_err = "Modell konnte nicht geladen werden (Datei defekt, kein GGUF oder zu wenig Arbeitsspeicher)."; return JNI_FALSE; }
+    mp.devices = g_devs.data();
+    mp.n_gpu_layers = (dev && ngl > 0) ? ngl : 0;
+    return llama_model_load_from_file(path.c_str(), mp);
+}
+
+static llama_context *make_ctx(llama_model *m, int nCtx, int nThreads, bool npu) {
     llama_context_params cp = llama_context_default_params();
     cp.n_ctx = nCtx > 0 ? nCtx : 8192;
     cp.n_batch = 512;
@@ -156,39 +269,82 @@ Java_de_foldki_app_ai_LlamaNative_nativeLoad(JNIEnv *env, jclass, jstring jpath,
     cp.n_threads = nThreads > 0 ? nThreads : 4;
     cp.n_threads_batch = std::min(8, cp.n_threads + 2);
     cp.swa_full = true;   // damit der Gesprächsanfang wiederverwendet werden kann
-    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
-    cp.type_k = GGML_TYPE_Q8_0;
-    cp.type_v = GGML_TYPE_Q8_0;
-    g_ctx = llama_init_from_model(g_model, cp);
-    if (!g_ctx) {
+    cp.flash_attn_type = npu ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_AUTO;   // NPU: wie run.py "-fa on"
+    // NPU: KV-Speicher F16 (Standard von llama.cpp auf der NPU), sonst komprimiert (Q8_0)
+    cp.type_k = npu ? GGML_TYPE_F16 : GGML_TYPE_Q8_0;
+    cp.type_v = npu ? GGML_TYPE_F16 : GGML_TYPE_Q8_0;
+    llama_context *c = llama_init_from_model(m, cp);
+    if (!c && npu) { cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO; c = llama_init_from_model(m, cp); }
+    if (!c) {
         // Ersatz 1: ohne komprimierten KV-Speicher, halber Kontext
         cp.type_k = GGML_TYPE_F16; cp.type_v = GGML_TYPE_F16; cp.n_ctx = std::min<uint32_t>(cp.n_ctx, 4096);
-        g_ctx = llama_init_from_model(g_model, cp);
+        c = llama_init_from_model(m, cp);
     }
-    if (!g_ctx) {
+    if (!c) {
         // Ersatz 2: kleinster sinnvoller Kontext
         cp.n_ctx = 2048;
-        g_ctx = llama_init_from_model(g_model, cp);
+        c = llama_init_from_model(m, cp);
     }
-    if (!g_ctx && ngl > 0) {
-        // Kein Kontext mit GPU: Modell nur für den Prozessor neu laden
-        llama_model_free(g_model);
+    return c;
+}
+
+// gpuPercent: Anteil der Schichten auf der GPU (0 = nur Prozessor, 100 = alles). npu: alle Schichten auf die NPU
+// (Hexagon, HTP0) statt auf die GPU. Klappt das Laden mit GPU/NPU nicht, wird automatisch nur mit dem Prozessor geladen.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_de_foldki_app_ai_LlamaNative_nativeLoad(JNIEnv *env, jclass, jstring jpath, jint nCtx, jint nThreads, jint gpuPercent, jboolean jnpu) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    free_all();
+    g_err.clear();
+    { std::lock_guard<std::mutex> il(g_info_mu); g_backend_info.clear(); }
+    load_backends("");
+    std::string path = jstr(env, jpath);
+    const bool wantNpu = jnpu == JNI_TRUE;
+    const char *gpu = gpu_name();
+    ggml_backend_dev_t gpuDev = opencl_dev();
+    int layers = gguf_layers(path);
+    int pct = std::max(0, std::min(100, (int) gpuPercent));
+
+    ggml_backend_dev_t dev = nullptr;
+    int ngl = 0;
+    ggml_backend_dev_t npuDev = nullptr;
+    if (wantNpu) {
+        { std::lock_guard<std::mutex> nl(g_npu_mu); g_npu_log.clear(); g_npu_rejected.clear(); }
+        npuDev = load_hexagon();
+        int ft = gguf_ftype(path);
+        if (ft != LLAMA_FTYPE_MOSTLY_Q4_0)
+            npu_note("NPU: Datei ist nicht Q4_0 (Typ " + std::to_string(ft) + ") – die NPU rechnet nur Q4_0 schnell, der Rest läuft auf dem Prozessor");
+        if (npuDev) { dev = npuDev; ngl = layers > 0 ? layers + 1 : 999; }   // NPU zählt wie GPU bei -ngl
+    } else if (gpuDev && pct > 0) {
+        dev = gpuDev;
+        if (layers <= 0) ngl = pct >= 100 ? 999 : 0;   // Schichtzahl unbekannt: nur bei 100 % auf die GPU
+        else if (pct >= 100) ngl = layers + 1;          // + Ausgabeschicht
+        else ngl = std::max(1, (int) ((layers * pct + 50) / 100));
+    }
+    const bool onNpu = npuDev && dev == npuDev;
+    if (onNpu) npu_verbose(true);
+    g_model = load_model(path, dev, ngl);
+    if (g_model && ngl > 0) {
+        g_ctx = make_ctx(g_model, nCtx, nThreads, onNpu);
+        if (!g_ctx) { llama_model_free(g_model); g_model = nullptr; }
+    }
+    if (onNpu) npu_verbose(false);
+    if (!g_model) {
+        // GPU/NPU hat nicht geklappt (oder war aus): nur mit dem Prozessor
+        if (ngl > 0 && onNpu) npu_note("NPU: Laden auf HTP0 fehlgeschlagen – nur Prozessor");
+        bool retry = ngl > 0;
         ngl = 0;
-        mp.n_gpu_layers = 0;
-        g_model = llama_model_load_from_file(path.c_str(), mp);
-        if (g_model) {
-            cp.type_k = GGML_TYPE_Q8_0; cp.type_v = GGML_TYPE_Q8_0; cp.n_ctx = nCtx > 0 ? nCtx : 8192;
-            g_ctx = llama_init_from_model(g_model, cp);
-            if (!g_ctx) { cp.type_k = GGML_TYPE_F16; cp.type_v = GGML_TYPE_F16; cp.n_ctx = 4096; g_ctx = llama_init_from_model(g_model, cp); }
-            if (!g_ctx) { cp.n_ctx = 2048; g_ctx = llama_init_from_model(g_model, cp); }
-        }
+        if (retry) g_model = load_model(path, nullptr, 0);
+        if (!g_model) { g_err = "Modell konnte nicht geladen werden (Datei defekt, kein GGUF oder zu wenig Arbeitsspeicher)."; return JNI_FALSE; }
     }
+    if (!g_ctx) g_ctx = make_ctx(g_model, nCtx, nThreads, false);
     if (!g_ctx) { g_err = "Zu wenig Arbeitsspeicher für dieses Modell."; free_all(); return JNI_FALSE; }
     {
         int total = layers > 0 ? layers : (int) llama_model_n_layer(g_model);
-        int on_gpu = std::min(ngl, total);
+        int on_dev = std::min(ngl, total);
         char info[256];
-        if (on_gpu > 0) snprintf(info, sizeof(info), "GPU (%s): %d von %d Schichten", gpu, on_gpu, total);
+        if (on_dev > 0 && onNpu) snprintf(info, sizeof(info), "NPU (Hexagon HTP0): %d von %d Schichten", on_dev, total);
+        else if (on_dev > 0) snprintf(info, sizeof(info), "GPU (%s): %d von %d Schichten", gpu, on_dev, total);
+        else if (wantNpu) snprintf(info, sizeof(info), "Nur Prozessor (NPU ließ sich nicht nutzen – siehe Fehlerbericht)");
         else if (gpu && pct > 0) snprintf(info, sizeof(info), "Nur Prozessor (GPU %s ließ sich nicht nutzen)", gpu);
         else if (gpu) snprintf(info, sizeof(info), "Nur Prozessor (GPU %s ist ausgeschaltet)", gpu);
         else snprintf(info, sizeof(info), "Nur Prozessor (keine GPU über OpenCL gefunden)");
@@ -201,6 +357,32 @@ Java_de_foldki_app_ai_LlamaNative_nativeLoad(JNIEnv *env, jclass, jstring jpath,
         g_tmpl.reset();
     }
     return JNI_TRUE;
+}
+
+// Bericht der letzten NPU-Ladung: Hexagon-Meldungen (z. B. "Hexagon Arch version v79") und abgelehnte Rechenschritte.
+extern "C" JNIEXPORT jstring JNICALL
+Java_de_foldki_app_ai_LlamaNative_nativeNpuReport(JNIEnv *env, jclass) {
+    std::string r;
+    {
+        std::lock_guard<std::mutex> lk(g_npu_mu);
+        r = g_npu_log;
+        if (!g_npu_rejected.empty()) {
+            r += "NPU lehnt ab (läuft auf dem Prozessor): ";
+            bool first = true;
+            for (const auto &o : g_npu_rejected) { if (!first) r += ", "; r += o; first = false; }
+            r += "\n";
+        } else if (g_hex_dev) {
+            r += "NPU lehnt keine Rechenschritte ab\n";
+        }
+    }
+    return env->NewStringUTF(r.c_str());
+}
+
+// Ist der NPU-Teil in dieser APK enthalten?
+extern "C" JNIEXPORT jboolean JNICALL
+Java_de_foldki_app_ai_LlamaNative_nativeNpuBuilt(JNIEnv *env, jclass, jstring jdir) {
+    std::string d = jstr(env, jdir);
+    return file_exists(d + "/libggml-hexagon.so") && file_exists(d + "/libggml-htp-v79.so") ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jstring JNICALL
