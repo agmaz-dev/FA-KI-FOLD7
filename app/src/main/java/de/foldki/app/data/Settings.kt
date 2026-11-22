@@ -130,6 +130,29 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("pdf_enabled", true)
         set(v) = prefs.edit().putBoolean("pdf_enabled", v).apply()
 
+    /** "Datum & App-Wissen mitgeben" (Meine Anweisungen): today's date, German and what the app can do go to the model. */
+    var appContext: Boolean
+        get() = prefs.getBoolean("app_context", true)
+        set(v) = prefs.edit().putBoolean("app_context", v).apply()
+
+    /** MCP-Werkzeuge: one own tool server (Streamable HTTP), only on this device. */
+    var mcpEnabled: Boolean
+        get() = prefs.getBoolean("mcp_enabled", false)
+        set(v) = prefs.edit().putBoolean("mcp_enabled", v).apply()
+    var mcpName: String
+        get() = prefs.getString("mcp_name", "") ?: ""
+        set(v) = prefs.edit().putString("mcp_name", v.trim()).apply()
+    var mcpUrl: String
+        get() = prefs.getString("mcp_url", "") ?: ""
+        set(v) = prefs.edit().putString("mcp_url", v.trim()).apply()
+    var mcpToken: String
+        get() = prefs.getString("mcp_token", "") ?: ""
+        set(v) = prefs.edit().putString("mcp_token", v.trim()).apply()
+    /** Number of tools found by the last "Verbinden & prüfen" (-1 = not checked). */
+    var mcpToolCount: Int
+        get() = prefs.getInt("mcp_tool_count", -1)
+        set(v) = prefs.edit().putInt("mcp_tool_count", v).apply()
+
     var showStats: Boolean
         get() = prefs.getBoolean("show_stats", true)
         set(v) = prefs.edit().putBoolean("show_stats", v).apply()
