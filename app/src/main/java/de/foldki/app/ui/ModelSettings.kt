@@ -107,6 +107,11 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
         State.Idle -> Unit
     }
 
+    // NPU (Hexagon V79 im Snapdragon 8 Elite) für GGUF-Modelle: alle Schichten auf den KI-Chip statt GPU-Anteil.
+    val npuBuilt = remember { de.foldki.app.ai.GgufEngine.npuBuilt(ctx) }
+    var npu by remember { mutableStateOf(vm.settings.npu) }
+    val npuOn = npu && npuBuilt && vm.settings.gemmaBackend != "CPU"
+
     ui.localModels.forEach { m ->
         val active = ui.activeModel == m.file
         val gguf = HfModels.isGguf(m.file)
@@ -141,6 +146,7 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
                 if (gemma) { add("Bilder" to FK.Muted); add("Werkzeuge" to FK.Muted) }
                 if (thinking) add("Denken" to FK.Purple)
                 if (crashed) add("hat die App beendet" to FK.Danger)
+                if (vm.settings.gemmaBackend == "GPU" && de.foldki.app.ai.GpuGuard.blocked(m.file)) add("auf GPU gesperrt" to FK.Danger)
                 if (!gguf) add("LiteRT" to FK.Muted)
             }
             if (tags.isNotEmpty()) androidx.compose.foundation.layout.FlowRow(
@@ -148,7 +154,7 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
             ) { tags.forEach { (t, c) -> Pill(t, c) } }
             Row(Modifier.padding(top = 12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Text(
-                    LocalModelManager.gb(m.size) + if (gguf) " · GPU-Anteil ${vm.settings.gpuPercent} %"
+                    LocalModelManager.gb(m.size) + if (gguf) (if (npuOn) " · NPU" else " · GPU-Anteil ${vm.settings.gpuPercent} %")
                         else " · braucht ~${"%.0f".format(java.util.Locale.GERMANY, kotlin.math.ceil(m.size * 1.15 / 1e9))} GB RAM",
                     fontSize = 13.sp, color = FK.Muted, modifier = Modifier.weight(1f),
                 )
@@ -169,6 +175,28 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
         }
     }
     if (ui.localModels.isEmpty()) Sub("Noch kein Modell auf dem Handy – unter „Erkunden“ eins laden oder oben rechts importieren.")
+
+    SectionLabel("NPU (Hexagon) für GGUF")
+    Group {
+        SettingRow(
+            "Auf der NPU rechnen",
+            if (npuBuilt) "Alle Schichten auf den KI-Chip statt GPU-Anteil. Experimentell, schnell nur mit Q4_0-Dateien."
+            else "Der NPU-Teil fehlt in dieser APK.",
+            leading = { Tile(Icons.Default.Memory, FK.T7) },
+        ) {
+            FkToggle(npu && npuBuilt, { on ->
+                npu = on
+                vm.settings.npu = on
+                vm.setGpuPercent(vm.settings.gpuPercent) // gibt das GGUF-Modell frei, es lädt neu mit NPU bzw. GPU
+            }, enabled = npuBuilt)
+        }
+    }
+    if (npu && npuBuilt) Sub("Klappt die NPU nicht, rechnet das Modell auf dem Prozessor; der Grund steht unten und im Fehlerbericht. Mit „Rechnen auf → CPU“ ist die NPU aus.")
+    val npuReport = remember(ui.backend) { de.foldki.app.ai.GgufEngine.lastNpuReport }
+    if (npuReport.isNotBlank()) {
+        SectionLabel("Letzter NPU-Start")
+        Card(Modifier.padding(bottom = 12.dp)) { Note(npuReport) }
+    }
 
     confirmDelete?.let { m ->
         AlertDialog(
