@@ -28,6 +28,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.takeWhile
+import de.foldki.app.ai.McpClient
+import de.foldki.app.ai.SessionFn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -116,6 +119,14 @@ private val LETTER_WORDS = Regex(
 /** With a letter in the chat, these mean "write the reply" (rejecting, objecting, not paying …). */
 private val REPLY_INTENT = Regex("(nicht (be)?zahl|nicht begleich|lehne .* ab|ablehn|widersprech|antwort|zurückschreib|schreib)", RegexOption.IGNORE_CASE)
 private val JUST_READ = Regex("(was steht|zusammenfass|fass .* zusammen|erklär|worum geht|was bedeutet|was heißt)", RegexOption.IGNORE_CASE)
+
+/** Short requests like "als PDF bitte": the app makes the PDF itself from the last answer (the model cannot). */
+private val PDF_WORD = Regex("\\bpdf\\b", RegexOption.IGNORE_CASE)
+private val INFO_QUESTION = Regex("^(was|wie|warum|wieso|weshalb|welche[rs]?|wo|wann)\\b", RegexOption.IGNORE_CASE)
+/** Placeholder the model sometimes leaves instead of a date. */
+private val DATE_PLACEHOLDER = Regex("\\[\\s*(aktuelles |heutiges )?datum( einfügen| eintragen)?\\s*\\]", RegexOption.IGNORE_CASE)
+/** Start of the app's own answer to a PDF request (never itself turned into a PDF). */
+private const val PDF_REPLY = "📄 PDF-Vorschau geöffnet"
 
 const val READY = "Sprachfunktion ist eingerichtet."
 
@@ -239,7 +250,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // Too hot: free the model's memory (it loads again with the next question).
         if (android.os.Build.VERSION.SDK_INT >= 29) runCatching {
             power.addThermalStatusListener(app.mainExecutor) { status ->
-                if (status >= android.os.PowerManager.THERMAL_STATUS_SEVERE && !llmGenerating) { freeModels(); _ui.update { it.copy(backend = "") } }
+                if (status >= android.os.PowerManager.THERMAL_STATUS_CRITICAL && !llmGenerating) { freeModels(); _ui.update { it.copy(backend = "") } }
             }
         }
     }
@@ -252,6 +263,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         settings.llmLoading = false
         val f = settings.llmAttempt
         if (f.isBlank()) return null
+        // GGUF crashed while the NPU was on: NPU off, the model stays usable (GPU share / CPU).
+        if (HfModels.isGguf(f) && settings.npu && settings.gemmaBackend != "CPU") {
+            settings.npu = false
+            de.foldki.app.data.DebugLog.write("Absturz mit NPU (${HfModels.displayName(f)}) – NPU ausgeschaltet")
+            return "${HfModels.displayName(f)} hat die App auf der NPU beendet – die NPU ist jetzt aus (GPU-Anteil/Prozessor). Unter Modelle → NPU wieder einschalten."
+        }
         // GGUF crashed with GPU share: like FA Fold KI the GPU share goes to 0 % and the model stays usable (CPU).
         if (HfModels.isGguf(f) && settings.gpuPercent > 0 && settings.gemmaBackend != "CPU") {
             settings.gpuPercent = 0
@@ -261,8 +278,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         return "${HfModels.displayName(f)} hat die App beendet – gesperrt, bis du es unter Einstellungen → KI-Modelle wieder auswählst"
     }
 
-    private fun tooHot(): Boolean = android.os.Build.VERSION.SDK_INT >= 29 &&
-        runCatching { power.currentThermalStatus >= android.os.PowerManager.THERMAL_STATUS_SEVERE }.getOrDefault(false)
+    private fun thermal(): Int = if (android.os.Build.VERSION.SDK_INT >= 29) runCatching { power.currentThermalStatus }.getOrDefault(0) else 0
+    private fun tooHot(): Boolean = thermal() >= android.os.PowerManager.THERMAL_STATUS_SEVERE
+
+    /**
+     * Phone hot: wait up to 60 s for it to cool down instead of refusing at once (right after an answer the status is
+     * often "severe" for a few seconds). Only "critical" or worse still stops the answer.
+     */
+    private suspend fun coolDown(onHot: (String) -> Unit) {
+        if (!tooHot()) return
+        de.foldki.app.data.DebugLog.write("Handy warm (Status ${thermal()}) – warte bis zu 60 s")
+        onHot("Das Handy ist warm – kurz abkühlen lassen …")
+        var waited = 0
+        while (tooHot() && waited < 60) { delay(2000); waited += 2 }
+        if (thermal() >= android.os.PowerManager.THERMAL_STATUS_CRITICAL)
+            throw IllegalStateException("Das Handy ist zu heiß. Bitte ein paar Minuten abkühlen lassen und nochmal fragen.")
+        de.foldki.app.data.DebugLog.write("Weiter nach $waited s (Status ${thermal()})")
+        onHot("")
+    }
 
     // ---- Models ----
     /** Chooses the model that answers ([Settings.NANO] or a file name). */
@@ -365,8 +398,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Runs [block] with the chosen local model loaded and the crash guard set. Errors are thrown (no other model answers). */
-    private suspend fun <T> withLocal(block: suspend () -> T): T {
-        if (tooHot()) throw IllegalStateException("Das Handy ist gerade zu heiß. Bitte kurz abkühlen lassen und nochmal fragen.")
+    private suspend fun <T> withLocal(onHot: (String) -> Unit = {}, block: suspend () -> T): T {
+        coolDown(onHot)
         idleJob?.cancel()
         llmBegin()
         llmGenerating = true
@@ -771,6 +804,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         persist()
     }
 
+    /** "Alle Chats löschen" (Verlauf): every chat and its files. */
+    fun deleteAll() {
+        stop()
+        _ui.value.conversations.flatMap { it.messages }.flatMap { it.attachments }.forEach { runCatching { java.io.File(it.path).delete() } }
+        _ui.update { it.copy(conversations = emptyList(), currentId = null) }
+        persist()
+    }
+
+    /** „Weiterschreiben“ under a cut answer: the model continues without the length limit. */
+    fun continueAnswer() = send("Schreib genau an der Stelle weiter, an der du aufgehört hast. Wiederhole nichts.", noLimit = true)
+
     fun stop() { job?.cancel(); job = null; _ui.update { it.copy(generating = false, thinking = false, liveCpu = -1) } }
 
     /**
@@ -778,10 +822,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * (Einstellungen → Systemanweisung), the chat and the question (plus text of attached files) – no built-in rules.
      * [voice] = asked in voice mode (only used for the error report).
      */
-    fun send(text: String, voice: Boolean = false) {
+    fun send(text: String, voice: Boolean = false, noLimit: Boolean = false) {
         val pendingFiles = _ui.value.pending
         val prompt = text.trim().ifEmpty { if (pendingFiles.isNotEmpty()) "Was steht in diesem Dokument? Fasse es kurz zusammen." else "" }
         if (prompt.isEmpty() || _ui.value.generating || _ui.value.importing) return
+        // "als PDF bitte": the app makes the PDF from the last answer itself (no model needed).
+        if (pendingFiles.isEmpty() && prompt.length <= 60 && PDF_WORD.containsMatchIn(prompt) && !INFO_QUESTION.containsMatchIn(prompt)) {
+            val lastAnswer = _ui.value.current?.messages?.lastOrNull { it.role == Role.ASSISTANT && !it.isError && it.text.isNotBlank() && !it.text.startsWith(PDF_REPLY) }
+            if (lastAnswer != null) { pdfFromChat(prompt, lastAnswer); return }
+        }
+        // „Länge“: letters and documents are always written in full; else the model is told the length and ends the sentence.
+        val docTask = LETTER_WORDS.containsMatchIn(prompt) || DOC_WORDS.containsMatchIn(prompt)
+        val answerLimit = if (noLimit || docTask) 0 else settings.answerLength.tokens
+        val lengthHint = when {
+            answerLimit in 1..500 -> "Antworte kurz: höchstens etwa 200 Wörter. Beende immer den letzten Satz."
+            answerLimit in 501..2000 -> "Antworte in höchstens etwa 800 Wörtern. Beende immer den letzten Satz."
+            else -> ""
+        }
+        // What the engine may write at most (thinking included): room to end the sentence after the limit.
+        val engineMax = if (answerLimit == 0) 0 else (answerLimit * 3 / 2 + de.foldki.app.ai.GgufEngine.THINK_BUDGET).coerceAtMost(de.foldki.app.ai.GgufEngine.MAX_ANSWER_TOKENS)
         val web = _ui.value.webSearch
         val act = settings.activeModel
         val useNano = act == Settings.NANO
@@ -822,26 +881,42 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 if (letters) analyzeDocs(conv.id, history.flatMap { it.attachments })
                 val history = _ui.value.conversations.firstOrNull { it.id == conv.id }?.messages?.dropLast(1) ?: history
-                val system = systemFor(conv.instruction)
+                val system = systemWithContext(conv.instruction, lengthHint)
                 logSystem = system
                 logHistory = history.size
-                if (settings.githubEnabled && isGitHubTask(prompt, history)) {
-                    // GitHub only with a downloaded model on the phone (Nano cannot use tools).
-                    if (HfModels.isGguf(act) || act.startsWith(de.foldki.app.ai.PcServer.PREFIX)) {
+                val onHot: (String) -> Unit = { t -> editMessage(conv.id, botMsg.id) { it.copy(text = t) } }
+                val ghTask = settings.githubEnabled && isGitHubTask(prompt, history)
+                val mcpTask = mcpReady() && isMcpTask(prompt, history)
+                if (ghTask || mcpTask) {
+                    // Tools (GitHub, own MCP server) with every model except Gemini Nano: LiteRT, GGUF and the PC server.
+                    if (useNano || act.isBlank()) {
                         editMessage(conv.id, botMsg.id) {
-                            it.copy(text = "GitHub-Werkzeuge gehen zurzeit nur mit LiteRT-Modellen (.litertlm), z. B. Gemma 4 E2B. Bitte so ein Modell wählen.")
+                            it.copy(text = "Für Werkzeuge (GitHub, MCP) bitte unter Menü → Modelle ein heruntergeladenes Modell oder den PC-Server wählen. " +
+                                "Gemini Nano kann keine Werkzeuge benutzen.")
                         }
-                    } else if (useNano || act.isBlank()) {
-                        editMessage(conv.id, botMsg.id) {
-                            it.copy(text = "Für GitHub-Aufgaben bitte unter Einstellungen → KI-Modelle ein heruntergeladenes Modell wählen " +
-                                "(z. B. Gemma 4 E2B). Gemini Nano kann keine Werkzeuge benutzen.")
+                    } else {
+                        val mcp = if (!mcpReady()) null else runCatching {
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                val c = McpClient(settings.mcpUrl, settings.mcpToken)
+                                c to c.listTools()
+                            }
+                        }.getOrElse { e ->
+                            editMessage(conv.id, botMsg.id) { it.copy(text = it.text + "MCP-Server nicht erreichbar: ${e.message ?: e.javaClass.simpleName}\n\n") }
+                            null
                         }
-                    } else withLocal {
-                        GemmaGitHubAgent(llm, settings.githubToken).run(
-                            baseSystem = systemFor(conv.instruction), question = prompt,
-                            onText = { t -> editMessage(conv.id, botMsg.id) { it.copy(text = it.text + t) } },
-                            approve = { title, details -> askApproval(title, details) },
-                        )
+                        val runAgent: suspend (SessionFn) -> Unit = { fn ->
+                            GemmaGitHubAgent(fn, if (settings.githubEnabled) settings.githubToken else "", mcp?.first, mcp?.second.orEmpty(), settings.mcpName).run(
+                                baseSystem = systemWithContext(conv.instruction), question = prompt,
+                                onText = { t -> editMessage(conv.id, botMsg.id) { it.copy(text = it.text + t) } },
+                                approve = { title, details -> askApproval(title, details) },
+                            )
+                        }
+                        val pc = _ui.value.activeServer
+                        when {
+                            pc != null -> runAgent { sys, first, max, onTurn -> ServerEngine.session(pc, sys, first, max, onTurn) }
+                            HfModels.isGguf(act) -> withLocal(onHot) { runAgent { sys, first, max, onTurn -> gguf.session(sys, first, max, onTurn) } }
+                            else -> withLocal(onHot) { runAgent { sys, first, max, onTurn -> llm.session(sys, first, max, onTurn) } }
+                        }
                     }
                     finished = true
                     return@launch
@@ -865,11 +940,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val raw = StringBuilder()
                 var pieces = 0
                 var tFirst = 0L
+                var answerPieces = 0
+                var stopNow = false
+                var cutNow = false
                 val onPiece: (String) -> Unit = { d ->
                     if (tFirst == 0L) tFirst = System.currentTimeMillis()
                     pieces++
                     raw.append(d)
                     val sp = ThinkParser.split(raw.toString(), thinkOpenName || ggufThink, finished = false)
+                    if (!sp.thinking && sp.answer.isNotEmpty()) answerPieces++
+                    // Length limit: stop at the end of a sentence; only far over the limit is the answer cut.
+                    if (answerLimit > 0 && !stopNow) {
+                        if (answerPieces >= answerLimit && endsSentence(sp.answer)) stopNow = true
+                        else if (answerPieces >= answerLimit * 3 / 2) { stopNow = true; cutNow = true }
+                    }
                     if (tAnswer == 0L && sp.answer.isNotBlank() && sp.thoughts.isNotEmpty()) tAnswer = System.currentTimeMillis()
                     if (sp.thinking != _ui.value.thinking) _ui.update { it.copy(thinking = sp.thinking) }
                     editMessage(conv.id, botMsg.id) { it.copy(text = sp.answer, thoughts = sp.thoughts) }
@@ -883,14 +967,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         val earlier = turns.subList(0, turns.lastIndexOf(last)).takeLast(20).map { turnOf(it, 6000) }.map { it.user to it.text }
                         val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + turnOf(last, 20000).text
                         de.foldki.app.data.DebugLog.write("START PC-Server ${server.typeLabel} ${server.base} · ${server.model} · Frage ${question.length}")
-                        ServerEngine.chat(server, system, earlier, question, settings.creativity.temperature, settings.answerLength.tokens).collect { onPiece(it) }
+                        ServerEngine.chat(server, system, earlier, question, settings.creativity.temperature, engineMax).takeWhile { !stopNow }.collect { onPiece(it) }
                     }
                 } else if (useNano) {
                     if (!_ui.value.nanoReady) checkNano().join()
                     if (!_ui.value.nanoReady) throw IllegalStateException("Gemini Nano ist nicht bereit: ${_ui.value.nanoStatus}")
-                    val limit = settings.answerLength.tokens
-                    nano.reply(system, history, web).let { f -> if (limit > 0) f.take(limit) else f }.collect { onPiece(it) }
-                } else if (HfModels.isGguf(act)) withLocal {
+                    nano.reply(system, history, web).let { f -> if (engineMax > 0) f.take(engineMax) else f }.takeWhile { !stopNow }.collect { onPiece(it) }
+                } else if (HfModels.isGguf(act)) withLocal(onHot) {
                     val budget = gguf.inputBudgetChars - system.length
                     val webText = if (web) webFor(prompt).take(budget / 4) else ""
                     val turns = history.filter { !it.isError && it.text.isNotBlank() }
@@ -902,11 +985,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + own.text
                     de.foldki.app.data.DebugLog.write("START GGUF ${models.nameOf(act)} · ${gguf.backendUsed} · Kontext ${gguf.contextTokens} · Frage ${question.length}")
                     var first = true
-                    gguf.chat(system, earlier, question, settings.creativity.temperature, settings.answerLength.tokens).collect {
+                    gguf.chat(system, earlier, question, settings.creativity.temperature, engineMax).takeWhile { !stopNow }.collect {
                         if (first) { first = false; ggufThink = gguf.thinkOpen }
                         onPiece(it)
                     }
-                } else withLocal {
+                } else withLocal(onHot) {
                     // Everything must fit into the model's context – too much input closes the whole app natively.
                     val budget = llm.inputBudgetChars - system.length
                     val webText = if (web) webFor(prompt).take(budget / 4) else ""
@@ -924,9 +1007,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             "Platz ${llm.inputBudgetChars} Zeichen · Anweisung ${system.length} · Frage ${question.length} · " +
                             "Verlauf ${earlier.size} Nachrichten (${earlier.sumOf { it.text.length }} Zeichen)",
                     )
-                    val limit = settings.answerLength.tokens
                     llm.chat(conv.id, system, earlier, question, last.id, botMsg.id, settings.creativity.temperature)
-                        .let { f -> if (limit > 0) f.take(limit) else f }.collect { onPiece(it) }
+                        .let { f -> if (engineMax > 0) f.take(engineMax) else f }.takeWhile { !stopNow }.collect { onPiece(it) }
                 }
                 val end = ThinkParser.split(raw.toString(), thinkOpenName || ggufThink, finished = true)
                 val now = System.currentTimeMillis()
@@ -938,6 +1020,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         backend = if (useNano) "AICore" else if (_ui.value.activeServer != null) "PC" else if (HfModels.isGguf(act)) (gguf.backendUsed ?: "") else (llm.backendUsed ?: ""),
                         cpuPct = if (useNano || _ui.value.activeServer != null) -1 else cpu.average(),
                         thinkMs = if (end.thoughts.isNotEmpty() && tFirst > 0) ((if (tAnswer > 0) tAnswer else now) - tFirst).coerceAtLeast(0) else 0,
+                        cut = cutNow || (answerLimit > 0 && answerPieces >= answerLimit && !endsSentence(end.answer)),
                     )
                 }
                 finished = true
@@ -994,6 +1077,72 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun webFor(question: String): String {
         // No prompt for search terms (from 3.3): the question itself is searched.
         return WebLookup.search(question.take(100))
+    }
+
+    /** true = the text ends a sentence (or a line), so stopping here does not cut a word or sentence. */
+    private fun endsSentence(t: String): Boolean {
+        val s = t.trimEnd()
+        if (s.isEmpty()) return false
+        return t.endsWith("\n") || s.last() in ".!?:)\"»“”"
+    }
+
+    /** "als PDF bitte": opens the PDF preview of the last answer and notes it in the chat. */
+    private fun pdfFromChat(prompt: String, answer: ChatMessage) {
+        val conv0 = _ui.value.current ?: return
+        val reply = if (settings.pdfEnabled) "$PDF_REPLY – dort speichern, teilen oder den Text ändern."
+            else "„Briefe & PDF“ ist unter Menü → Werkzeuge ausgeschaltet. Bitte dort einschalten, dann geht es."
+        upsert(conv0.copy(
+            messages = conv0.messages + ChatMessage(role = Role.USER, text = prompt) + ChatMessage(role = Role.ASSISTANT, text = reply, model = answer.model),
+            updatedAt = System.currentTimeMillis(),
+        ))
+        if (settings.pdfEnabled) openPreview(DocumentParser.parse(answer.text).document ?: DocumentParser.display(answer.text))
+    }
+
+    // ---- MCP-Werkzeuge (own tool server) ----
+    private fun mcpReady(): Boolean = settings.mcpEnabled && settings.mcpUrl.isNotBlank()
+
+    /** MCP task: the user names the server, "MCP", "Werkzeug"/"Tool" – or the chat is already working with it. */
+    private fun isMcpTask(prompt: String, history: List<ChatMessage>): Boolean {
+        val p = prompt.lowercase()
+        if (Regex("\\b(mcp|werkzeuge?|tools?)\\b").containsMatchIn(p)) return true
+        val name = settings.mcpName.trim().lowercase()
+        if (name.length >= 3 && p.contains(name)) return true
+        return history.takeLast(4).any { m -> m.role == Role.ASSISTANT && (m.text.contains("🧰 ") || m.text.contains("Freigegeben: Werkzeug")) }
+    }
+
+    private val _mcpChecking = MutableStateFlow(false)
+    val mcpChecking: StateFlow<Boolean> = _mcpChecking.asStateFlow()
+    private val _mcpStatus = MutableStateFlow(mcpStatusText())
+    val mcpStatus: StateFlow<String> = _mcpStatus.asStateFlow()
+
+    private fun mcpStatusText(): String = when {
+        settings.mcpUrl.isBlank() -> "Nicht eingerichtet"
+        settings.mcpToolCount >= 0 -> "Verbunden – ${settings.mcpToolCount} Werkzeuge" + if (settings.mcpEnabled) "" else " (ausgeschaltet)"
+        else -> "Adresse eingetragen – noch nicht geprüft"
+    }
+
+    fun setMcpEnabled(on: Boolean) { settings.mcpEnabled = on; _mcpStatus.value = mcpStatusText() }
+
+    /** Saves name, address and token and asks the server for its tools. */
+    fun checkMcp(name: String, url: String, token: String) {
+        settings.mcpName = name; settings.mcpUrl = url; settings.mcpToken = token
+        settings.mcpToolCount = -1
+        _mcpStatus.value = mcpStatusText()
+        if (url.isBlank()) return
+        _mcpChecking.value = true
+        viewModelScope.launch {
+            val r = runCatching { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { McpClient(url.trim(), token.trim()).listTools() } }
+            _mcpChecking.value = false
+            r.onSuccess { tools ->
+                settings.mcpToolCount = tools.size
+                settings.mcpEnabled = true
+                _mcpStatus.value = mcpStatusText()
+                notify("MCP verbunden: ${tools.size} Werkzeuge")
+            }.onFailure { e ->
+                _mcpStatus.value = "Nicht erreichbar: ${e.message?.take(120) ?: e.javaClass.simpleName}"
+                notify("MCP-Server nicht erreichbar")
+            }
+        }
     }
 
     /** Puts a finished letter (or a document the user asked for as letter) into the chat as a PDF. */
@@ -1098,8 +1247,33 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private fun systemFor(instructionId: String): String =
         settings.instructions.firstOrNull { it.id == instructionId }?.text?.trim() ?: settings.systemPrompt.trim()
 
-    /** Text that goes into a PDF: letters without a date line get today's date (safety net, no duplicates). */
-    fun pdfText(doc: String): String = DocumentParser.ensureDateLine(doc, today(), place = settings.activeSender?.city)
+    /**
+     * "Datum & App-Wissen mitgeben" (on by default, page Meine Anweisungen): today's date, German, the length wish and
+     * what the app can do. Kept short – long built-in rules made thinking models slow. The user's own instruction follows it.
+     */
+    private fun appContext(lengthHint: String): String {
+        if (!settings.appContext) return lengthHint
+        val day = java.text.SimpleDateFormat("EEEE, d. MMMM yyyy", java.util.Locale.GERMANY).format(java.util.Date())
+        return buildString {
+            append("Heute ist ").append(day).append(".\n")
+            append("Antworte auf Deutsch, außer der Nutzer möchte eine andere Sprache.\n")
+            append("Du bist die KI der App „Fold KI“ auf dem Handy des Nutzers. Die App kann:")
+            if (settings.pdfEnabled) append("\n- aus Briefen und Schreiben eine PDF machen (der Nutzer schreibt „als PDF“ oder tippt auf die PDF-Karte). Schreib Briefe vollständig, mit dem heutigen Datum statt Platzhaltern.")
+            append("\n- im Internet suchen, wenn der Schalter „Websuche“ an ist (gerade ").append(if (settings.webSearch) "an" else "aus").append(").")
+            if (settings.githubEnabled && settings.githubToken.isNotBlank()) append("\n- auf GitHub arbeiten (Repos lesen, Code ändern, Builds prüfen), wenn der Nutzer GitHub, ein Repo oder Code erwähnt.")
+            if (mcpReady()) append("\n- Werkzeuge vom eigenen Server „").append(settings.mcpName.ifBlank { "MCP" }).append("“ benutzen, wenn der Nutzer Werkzeuge oder den Server erwähnt.")
+            append("\n- Antworten vorlesen und Sprache erkennen.")
+            append("\nSag nie, dass du etwas nicht kannst, was die App kann.")
+            if (lengthHint.isNotBlank()) append("\n").append(lengthHint)
+        }
+    }
+
+    /** App context + the chat's own instruction (the user's text comes last and wins). */
+    private fun systemWithContext(instructionId: String, lengthHint: String = ""): String =
+        listOf(appContext(lengthHint), systemFor(instructionId)).filter { it.isNotBlank() }.joinToString("\n\n")
+
+    /** Text that goes into a PDF: date placeholders get today's date; letters without a date line get one (no duplicates). */
+    fun pdfText(doc: String): String = DocumentParser.ensureDateLine(doc.replace(DATE_PLACEHOLDER, today()), today(), place = settings.activeSender?.city)
 
     /** Signature of the active profile; always drawn into letter PDFs (never sent to any AI). */
     fun activeSignature(): android.graphics.Bitmap? = settings.activeSender?.let { signatures.load(it.id) }
