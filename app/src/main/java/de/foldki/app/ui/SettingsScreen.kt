@@ -132,7 +132,7 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, on
         "nano" -> "Gemini Nano"; "models" -> "Modelle"; "hf" -> "Erkunden"; "claude" -> "Claude (online)"; "github" -> "GitHub"
         "sender" -> "Absender & Unterschrift"; "voice" -> "Stimmen"; "brief" -> "Tagesstart"
         "system" -> "Systemanweisung"; "memory" -> "Gedächtnis"; "report" -> "Fehlerbericht"
-        "server" -> "PC-Server"; "history" -> "Verlauf"; "saved" -> "Verlauf"; "s3" -> "S3-Sicherung"; "compute" -> "Rechnen auf"; "gpu" -> "GPU-Anteil"; "instructions" -> "Meine Anweisungen"; "tools" -> "Werkzeuge"
+        "server" -> "PC-Server"; "history" -> "Verlauf"; "saved" -> "Verlauf"; "s3" -> "S3-Sicherung"; "compute" -> "Rechnen auf"; "gpu" -> "GPU-Anteil"; "instructions" -> "Meine Anweisungen"; "tools" -> "Werkzeuge"; "mcp" -> "MCP-Werkzeuge"
         else -> "Einstellungen"
     }
 
@@ -179,6 +179,7 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, on
                         "instructions" -> InstructionsPage(vm, ui)
                         "server" -> ServerPage(vm, ui)
                         "tools" -> ToolsPage(vm, ui, ghToken) { page = it }
+                        "mcp" -> McpPage(vm)
                         "s3" -> S3Page(vm)
                         "compute" -> ComputePage(vm, ui)
                         "gpu" -> GpuPage(vm)
@@ -282,8 +283,20 @@ private fun GpuPage(vm: ChatViewModel) {
 
 /** "Verlauf" (all chats) or "Gemerkt" (saved answers) – exactly like mock-up 16. */
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 private fun HistoryPage(vm: ChatViewModel, ui: UiState, saved: Boolean, onOpen: () -> Unit) {
     var tab by rememberSaveable { mutableStateOf(if (saved) 1 else 0) }
+    var confirmDelete by remember { mutableStateOf<de.foldki.app.data.Conversation?>(null) }
+    var confirmAll by remember { mutableStateOf(false) }
+    confirmDelete?.let { c -> DeleteChatDialog(c, onDelete = { vm.delete(c.id); confirmDelete = null }, onDismiss = { confirmDelete = null }) }
+    if (confirmAll) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { confirmAll = false },
+        containerColor = FK.Surface,
+        title = { Text("Alle Chats löschen?", color = FK.Text) },
+        text = { Text("Alle ${ui.conversations.size} Chats und ihre Dateien werden vom Handy gelöscht. Das lässt sich nicht rückgängig machen. Gemerkte Antworten bleiben.", color = FK.Muted) },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = { vm.deleteAll(); confirmAll = false }) { Text("Alle löschen", color = FK.Danger) } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { confirmAll = false }) { Text("Abbrechen", color = FK.Accent) } },
+    )
     var q by rememberSaveable { mutableStateOf("") }
     Segmented(listOf("Chats", "Gemerkt ☆"), tab, Modifier.padding(bottom = 14.dp)) { tab = it }
     SearchBox(q, { q = it }, if (tab == 0) "Chats durchsuchen" else "Gemerktes durchsuchen", Modifier.padding(bottom = 12.dp))
@@ -298,7 +311,9 @@ private fun HistoryPage(vm: ChatViewModel, ui: UiState, saved: Boolean, onOpen: 
                     if (i > 0) androidx.compose.material3.HorizontalDivider(Modifier.padding(start = 16.dp), thickness = 0.5.dp, color = FK.Line)
                     val model = c.messages.lastOrNull { it.model != null }?.model.orEmpty()
                     Row(
-                        Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable { vm.open(c.id); onOpen() }.padding(horizontal = 16.dp, vertical = 11.dp),
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .combinedClickable(onClick = { vm.open(c.id); onOpen() }, onLongClick = { confirmDelete = c }, onLongClickLabel = "Löschen")
+                            .padding(horizontal = 16.dp, vertical = 11.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
@@ -310,6 +325,11 @@ private fun HistoryPage(vm: ChatViewModel, ui: UiState, saved: Boolean, onOpen: 
                     }
                 }
             }
+        }
+        if (ui.conversations.isNotEmpty()) {
+            Note("Lange auf einen Chat drücken, um ihn zu löschen.", Modifier.padding(start = 6.dp, end = 6.dp, top = 12.dp))
+            Spacer(Modifier.height(14.dp))
+            Cta("Alle Chats löschen", ghost = true, color = FK.Danger) { confirmAll = true }
         }
     } else {
         val list = ui.saved.filter { needle.isEmpty() || it.text.lowercase().contains(needle) }
@@ -358,7 +378,14 @@ private fun InstructionsPage(vm: ChatViewModel, ui: UiState) {
     var edit by remember { mutableStateOf<de.foldki.app.data.Instruction?>(null) }
     edit?.let { e -> InstructionEditor(vm, ui, e) { edit = null }; return }
     PageAction { NavBtn(Icons.Default.Add, "Neue Anweisung", bg = FK.Accent, tint = androidx.compose.ui.graphics.Color.White) { edit = de.foldki.app.data.Instruction(name = "", text = "") } }
-    Sub("Nur was du selbst schreibst – nichts ist eingebaut. Pro Chat eine Anweisung wählen.")
+    var appCtx by remember { mutableStateOf(vm.settings.appContext) }
+    Sub("Deine eigenen Anweisungen – pro Chat eine wählen. Dazu gibt die App auf Wunsch das heutige Datum, Deutsch als Sprache und ihre Werkzeuge mit.")
+    Group {
+        SettingRow("Datum & App-Wissen mitgeben", "heutiges Datum, Deutsch, was die App kann (PDF, Websuche, GitHub, MCP)", leading = { Tile(Icons.Default.Psychology, FK.T4) }) {
+            FkToggle(appCtx, { on -> appCtx = on; vm.settings.appContext = on })
+        }
+    }
+    Spacer(Modifier.height(14.dp))
     if (ui.instructions.isNotEmpty()) Group {
         ui.instructions.forEachIndexed { i, ins ->
             if (i > 0) GroupDivider()
@@ -389,7 +416,7 @@ private fun InstructionsPage(vm: ChatViewModel, ui: UiState) {
         ) {
             Column(Modifier.weight(1f)) {
                 Text("Keine", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = FK.Text)
-                Text("Das Modell bekommt nur deine Frage", fontSize = 13.sp, color = FK.Muted)
+                Text(if (appCtx) "Das Modell bekommt deine Frage und das App-Wissen" else "Das Modell bekommt nur deine Frage", fontSize = 13.sp, color = FK.Muted)
             }
             if (ui.newInstruction.isEmpty()) Pill("Aktiv", FK.Ok) else Chevron()
         }
@@ -442,10 +469,10 @@ private fun ToolsPage(vm: ChatViewModel, ui: UiState, ghToken: String, open: (St
     }
     SectionLabel("Erweitert")
     Group {
-        SettingRow("MCP-Werkzeuge", "eigene Werkzeug-Server", leading = { Tile(Icons.Default.Build, FK.T8) }) {
-            Pill("Test", FK.Warn)
-            Spacer(Modifier.width(8.dp))
-            FkToggle(false, { vm.notify("MCP-Werkzeuge kommen im nächsten Schritt.") })
+        val mcpStatus by vm.mcpStatus.collectAsStateWithLifecycle()
+        var mcpOn by remember { mutableStateOf(vm.settings.mcpEnabled && vm.settings.mcpUrl.isNotBlank()) }
+        SettingRow("MCP-Werkzeuge", mcpStatus, leading = { Tile(Icons.Default.Build, FK.T8) }, onClick = { open("mcp") }) {
+            FkToggle(mcpOn, { on -> if (on && vm.settings.mcpUrl.isBlank()) open("mcp") else { mcpOn = on; vm.setMcpEnabled(on) } })
         }
     }
 }
@@ -523,6 +550,48 @@ private fun ClaudePage(key: String, setKey: (String) -> Unit, model: String, set
     }
 }
 
+/** "MCP-Werkzeuge": one own tool server (Streamable HTTP). Read-only tools run at once, all others need "Freigeben". */
+@Composable
+private fun McpPage(vm: ChatViewModel) {
+    val status by vm.mcpStatus.collectAsStateWithLifecycle()
+    val checking by vm.mcpChecking.collectAsStateWithLifecycle()
+    var name by remember { mutableStateOf(vm.settings.mcpName) }
+    var url by remember { mutableStateOf(vm.settings.mcpUrl) }
+    var token by remember { mutableStateOf(vm.settings.mcpToken) }
+    var on by remember { mutableStateOf(vm.settings.mcpEnabled) }
+    PageHeader(
+        Icons.Default.Build, FK.T8, status,
+        "Ein eigener Werkzeug-Server (MCP, Streamable HTTP), z. B. auf deinem PC im WLAN. Das gewählte Modell (nicht Gemini Nano) " +
+            "benutzt seine Werkzeuge, wenn du „Werkzeug“, „MCP“ oder den Namen des Servers schreibst.",
+    )
+    SectionLabel("Server")
+    Group {
+        FkField("Name (z. B. Mein PC)", name, { name = it })
+        FkField("Adresse (z. B. http://192.168.0.10:8000/mcp)", url, { url = it })
+        FkField("Token (nur wenn der Server einen braucht)", token, { token = it }, password = true)
+        if (checking) Box(Modifier.fillMaxWidth().height(48.dp).padding(bottom = 14.dp), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = FK.Accent)
+        } else FkButton("Verbinden & prüfen", Modifier.padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 14.dp), enabled = url.isNotBlank()) {
+            vm.checkMcp(name, url, token); on = true
+        }
+    }
+    SectionLabel("Was darf Fold KI?")
+    Group {
+        SettingRow("MCP-Werkzeuge benutzen", "an = Werkzeuge stehen dem Modell zur Verfügung", leading = { Tile(Icons.Default.Build, FK.T8) }) {
+            FkToggle(on, { v -> if (v && url.isBlank()) vm.notify("Bitte zuerst die Adresse eintragen.") else { on = v; vm.setMcpEnabled(v) } })
+        }
+        GroupDivider()
+        SettingRow("Lesende Werkzeuge", "sofort, ohne Nachfrage", leading = { Tile(Icons.Default.Visibility, FK.T3) }) { FkToggle(true, {}, enabled = false) }
+        GroupDivider()
+        SettingRow("Alle anderen Werkzeuge", "immer mit deiner Freigabe", leading = { Tile(Icons.Default.Check, FK.T1) }) { FkToggle(true, {}, enabled = false) }
+    }
+    Note(
+        "Adresse und Token bleiben nur auf diesem Handy und gehen nur an diesen Server. Unterstützt wird MCP über HTTP " +
+            "(Streamable HTTP); Server, die nur über die Kommandozeile (stdio) laufen, gehen auf dem Handy nicht.",
+        Modifier.padding(start = 14.dp, end = 14.dp, top = 12.dp),
+    )
+}
+
 @Composable
 private fun GitHubPage(vm: ChatViewModel, token: String, setToken: (String) -> Unit) {
     val login by vm.githubLogin.collectAsStateWithLifecycle()
@@ -554,7 +623,7 @@ private fun GitHubPage(vm: ChatViewModel, token: String, setToken: (String) -> U
     Note(
         "Token anlegen: github.com → Settings → Developer settings → Personal access tokens. Rechte: Contents, Pull requests, " +
             "Issues, Actions, Workflows (Lesen und Schreiben), Administration (zum Anlegen von Repos). " +
-            "Fold KI arbeitet dafür mit dem gewählten heruntergeladenen Modell auf dem Handy (nicht mit Nano). Kein weiterer Schlüssel nötig.",
+            "Fold KI arbeitet dafür mit dem gewählten Modell – LiteRT, GGUF (auch auf der NPU) oder dem PC-Server, nicht mit Gemini Nano. Kein weiterer Schlüssel nötig.",
         Modifier.padding(start = 14.dp, end = 14.dp, top = 12.dp),
     )
 }
