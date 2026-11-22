@@ -110,8 +110,13 @@ class GgufEngine(context: Context) {
                 earlier.forEach { (user, text) -> add((if (user) "user" else "assistant") to text) }
                 add("user" to question)
             },
-            if (maxTokens > 0) maxTokens else MAX_ANSWER_TOKENS, temperature?.toFloat() ?: 0.6f, think = true,
+            if (maxTokens > 0) maxTokens else MAX_ANSWER_TOKENS, temperature?.toFloat() ?: 0.6f,
+            think = thinkMode() != THINK_OFF, budget = thinkBudget(),
         )
+
+    /** „Denken“ for thinking models (Modelle page): "off" = no thinking, "short" = at most [THINK_SHORT] tokens, "normal". */
+    private fun thinkMode(): String = prefs.getString(KEY_THINK, THINK_NORMAL) ?: THINK_NORMAL
+    private fun thinkBudget(): Int = when (thinkMode()) { THINK_OFF -> 0; THINK_SHORT -> THINK_SHORT_BUDGET; else -> THINK_BUDGET }
 
     /** Multi-step conversation (GitHub tasks). */
     suspend fun session(system: String, first: String, maxSteps: Int, onTurn: suspend (String) -> String?): Int {
@@ -123,7 +128,7 @@ class GgufEngine(context: Context) {
             step++
             while (msgs.size > 3 && msgs.sumOf { it.second.length } > 16_000) { msgs.removeAt(1); msgs.removeAt(1) }
             val sb = StringBuilder()
-            generate((if (system.isBlank()) emptyList() else listOf("system" to system)) + msgs, MAX_ANSWER_TOKENS, 0.3f, think = true)
+            generate((if (system.isBlank()) emptyList() else listOf("system" to system)) + msgs, MAX_ANSWER_TOKENS, 0.3f, think = true, budget = THINK_BUDGET)
                 .collect { sb.append(it) }
             val answer = ThinkParser.answerOnly(sb.toString(), LlamaNative.nativeThinkOpen())
             de.foldki.app.data.DebugLog.write("GGUF GitHub Schritt $step: " + answer.replace("\n", "⏎").take(800))
@@ -134,13 +139,13 @@ class GgufEngine(context: Context) {
         return step
     }
 
-    private fun generate(messages: List<Pair<String, String>>, maxTokens: Int, temp: Float, think: Boolean): Flow<String> = callbackFlow {
+    private fun generate(messages: List<Pair<String, String>>, maxTokens: Int, temp: Float, think: Boolean, budget: Int): Flow<String> = callbackFlow {
         if (loadedPath == null) throw IllegalStateException("Kein GGUF-Modell geladen.")
         val job = launch(Dispatchers.Default) {
             genMutex.withLock {
                 val stats = LlamaNative.nativeGenerate(
                     messages.map { it.first }.toTypedArray(), messages.map { it.second }.toTypedArray(),
-                    maxTokens, temp, 20, 0.95f, think, if (think) THINK_BUDGET else 0,
+                    maxTokens, temp, 20, 0.95f, think, if (think) budget else 0,
                 ) { bytes -> trySend(String(bytes, Charsets.UTF_8)) }
                 val err = runCatching { JSONObject(stats).optString("error") }.getOrDefault("")
                 if (err.isNotBlank()) close(IllegalStateException(err)) else close()
@@ -170,5 +175,11 @@ class GgufEngine(context: Context) {
         const val N_CTX = 8192
         const val MAX_ANSWER_TOKENS = 4000
         const val THINK_BUDGET = 1200
+        const val THINK_SHORT_BUDGET = 256
+        /** Settings key and values for „Denken“ (GGUF thinking models). */
+        const val KEY_THINK = "gguf_think"
+        const val THINK_OFF = "off"
+        const val THINK_SHORT = "short"
+        const val THINK_NORMAL = "normal"
     }
 }
