@@ -75,7 +75,7 @@ class GgufEngine(context: Context) {
                     val ok = LlamaNative.nativeLoad(path, N_CTX, threads, gpuPercent.coerceIn(0, 100), npu)
                     if (npu) prefs.edit().putBoolean(KEY_NPU_LOADING, false).commit()
                     if (!ok) {
-                        if (npu) { lastNpuReport = LlamaNative.nativeNpuReport().trim(); de.foldki.app.data.DebugLog.write("NPU-Bericht:\n$lastNpuReport") }
+                        if (npu) { lastNpuReport = slim(LlamaNative.nativeNpuReport()); de.foldki.app.data.DebugLog.write("NPU-Bericht:\n$lastNpuReport") }
                         throw IllegalStateException(LlamaNative.nativeError().ifBlank { "GGUF-Modell konnte nicht geladen werden." })
                     }
                     contextTokens = LlamaNative.nativeContextSize().takeIf { it > 0 } ?: N_CTX
@@ -90,7 +90,7 @@ class GgufEngine(context: Context) {
                     }
                     de.foldki.app.data.DebugLog.write("GGUF geladen: ${path.substringAfterLast('/')} · $info")
                     if (npu) {
-                        lastNpuReport = LlamaNative.nativeNpuReport().trim()
+                        lastNpuReport = slim(LlamaNative.nativeNpuReport())
                         de.foldki.app.data.DebugLog.write("NPU-Bericht:\n$lastNpuReport")
                     }
                     backendUsed!!
@@ -167,6 +167,18 @@ class GgufEngine(context: Context) {
         /** Report of the last load with NPU ("Hexagon Arch version v79", rejected operations) for the Modelle page. */
         @Volatile var lastNpuReport: String = ""
             private set
+
+        /**
+         * NPU report without the hundreds of per-layer lines ("init-tensor", buffer lines) – they made the error report huge.
+         * Warnings, rejected steps and the summary stay.
+         */
+        fun slim(report: String): String {
+            val lines = report.trim().lines()
+            val noise = Regex("init-tensor|allocated buffer|mapped buffer")
+            val keep = lines.filterNot { noise.containsMatchIn(it) }
+            val dropped = lines.size - keep.size
+            return (keep + if (dropped > 0) listOf("($dropped Zeilen zu einzelnen Modellschichten ausgelassen)") else emptyList()).joinToString("\n")
+        }
 
         /** true = the NPU part (Hexagon) is in this APK. */
         fun npuBuilt(context: Context): Boolean = LlamaNative.available &&
