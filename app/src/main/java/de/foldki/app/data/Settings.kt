@@ -75,6 +75,14 @@ class Settings(context: Context) {
         get() = prefs.getInt("gpu_percent", 75)
         set(v) = prefs.edit().putInt("gpu_percent", v.coerceIn(0, 100)).apply()
 
+    /**
+     * GGUF (llama.cpp): all layers on the NPU (Hexagon of the Galaxy Z Fold 7) instead of the GPU share.
+     * Experimental; best with Q4_0 files. Off by default.
+     */
+    var npu: Boolean
+        get() = prefs.getBoolean("npu", false)
+        set(v) = prefs.edit().putBoolean("npu", v).apply()
+
     /** PC-Server (LM Studio / Ollama) in the home WLAN. */
     var servers: List<de.foldki.app.ai.PcServer>
         get() = de.foldki.app.ai.PcServer.listFromJson(prefs.getString("pc_servers", "[]"))

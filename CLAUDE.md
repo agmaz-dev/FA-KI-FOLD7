@@ -24,13 +24,15 @@
 ## Logo (ab 4.4)
 - Überall das FA-KI-Logo aus FA KI Desktop (`src/logo.svg`, Zweig feature/agent-erkunden): App-Symbol (`mipmap-anydpi-v26/ic_launcher.xml`, Hintergrund `drawable/ic_launcher_background.xml`, Zeichen `drawable-nodpi/ic_launcher_fg.png`) und in der App `drawable-nodpi/logo_fa_ki.png` (`AppLogo` in Menü, Chatliste, Startbildschirm).
 
-## Geplant: NPU (Hexagon) – noch nicht gebaut, erst nach Go des Nutzers
-- Ziel: GGUF-Modelle zusätzlich auf der NPU des Fold 7 (Hexagon V79) über llama.cpp, Auswahl „NPU“ neben dem GPU-Anteil (Modelle-Seite).
-- Geprüft: llama.cpp **b12287 reicht** (enthält `ggml-hexagon`, `htp/gated-delta-net-ops.c` mit HMX-chunked für Qwen3.5/DeltaNet, `docs/backend/snapdragon/CMakeUserPresets.json`). Keine Versionsänderung nötig.
-- Bau: GitHub Actions im Docker-Image `ghcr.io/snapdragon-toolchain/arm64-android:v0.8` (NDK + Hexagon SDK), `GGML_HEXAGON=ON` zusätzlich zu OpenCL, `GGML_BACKEND_DL`; `libggml-hexagon.so` + `libggml-htp-v79.so` (ggf. v73/v75/v81) in die APK. **Keine** QAIRT/QNN-Bibliotheken nötig, kein adb, kein llama-server.
-- App: `<uses-native-library libcdsprpc.so>` im Manifest, `ADSP_LIBRARY_PATH` auf `nativeLibraryDir` setzen, Gerät `HTP0` wählen (NPU zählt wie GPU bei `-ngl`). Fehlerbericht: ob „Hexagon Arch version v79“ startet und welche Ops abgelehnt werden.
-- Risiken: Backend „experimental“; ob Samsung einer normalen App FastRPC/NPU erlaubt, zeigt erst der Test. NPU braucht `Q4_0` (nicht Q4_K_M). Testmodell: `fraQtl/Qwen3.5-4B-NPU-GGUF` (Q4_0) oder normales Q4_0 von Qwen3.5-4B.
-- Offen außerdem: Qwen-`.litertlm` ohne „gpu“ im Namen stürzt auf der GPU ab (Speicher) – Vorschlag: vorher sperren mit Hinweis auf GGUF/gpu-Variante (noch nicht gebaut).
+## NPU (Hexagon) – gebaut ab 4.5, Test auf dem Fold 7 steht aus
+- GGUF-Modelle wahlweise komplett auf der NPU (Hexagon V79) über llama.cpp b12287. Schalter „Auf der NPU rechnen“ auf der Seite GPU-Anteil (`GpuPage`, `Settings.npu`, Standard aus); mit NPU gilt der GPU-Anteil nicht, „Auf CPU rechnen“ schaltet auch die NPU ab.
+- Bau: Job `npu` in `.github/workflows/build-apk.yml` im Image `ghcr.io/snapdragon-toolchain/arm64-android:v0.8` (Preset `arm64-android-snapdragon-release`, `GGML_HEXAGON=ON`, `GGML_OPENCL=OFF`, `GGML_BACKEND_DL`, `c++_shared`) → nur `libggml-hexagon.so` + `libggml-htp-v73…v85.so` nach `app/npu-libs` (jniLibs-Ordner, Cache-Schlüssel `npu-hexagon-b12287-v1`). Die Gradle-Bauweise nutzt dann dieselbe NDK-Version (`-Pfoldki.ndk`). Schlägt der NPU-Bau fehl, entsteht die APK ohne NPU (Schalter gesperrt, Hinweis). Keine QAIRT/QNN-Bibliotheken, kein adb.
+- App (`cpp/foldki_llm.cpp`): NPU-Teil wird nur bei Wahl NPU geladen (`load_hexagon`), vorher `ADSP_LIBRARY_PATH`/`GGML_HEXAGON_LIBHTP_DIR` = `nativeLibraryDir`; Gerät `HTP0`, alle Schichten (`-ngl`), Flash-Attention an, KV F16. Geräte werden immer ausdrücklich gewählt (`mp.devices`), weil sich die NPU als „GPU“ meldet; die Grafikkarte wird über den Namen „OpenCL“ gefunden. Manifest: `<uses-native-library libcdsprpc.so>`.
+- Fehlerbericht: `LlamaNative.nativeNpuReport()` → DebugLog „NPU-Bericht“ und Karte „Letzter NPU-Start“: Hexagon-Meldungen (z. B. „Hexagon Arch version v79“), Fehler, Hinweis bei Nicht-Q4_0, abgelehnte Rechenschritte (`opt_verbose` nur während Laden). NPU klappt nicht → Prozessor; Absturz mit NPU → NPU aus.
+- Risiken: Backend „experimental“; ob Samsung einer normalen App FastRPC/NPU erlaubt, zeigt erst der Test. Testmodell: `fraQtl/Qwen3.5-4B-NPU-GGUF` (Q4_0) oder Q4_0 von Qwen3.5-4B.
+
+## Qwen-LiteRT ohne „gpu“ (ab 4.5)
+- `.litertlm`-Dateien mit „qwen“ und ohne „gpu“ im Namen sind auf der GPU gesperrt (`ai/GpuGuard.kt`, Prüfung in `ensureLoaded` vor dem Laden, Tag „auf GPU gesperrt“ auf der Modellkarte, Hinweis beim Auswählen): Hinweis auf GGUF (Q4_K_M) oder gpu-Variante; mit „Rechnen auf → CPU“ erlaubt.
 
 ## Entwürfe 1:1 (höchste Priorität)
 - Die freigegebenen Entwürfe liegen in `design/` (`1-chat.png` … `18-aufgeklappt.png`, Quelle `design/entwuerfe.html` mit allen Farben/Größen/Abständen). **Jeder Bildschirm wird 1:1 wie im Entwurf gebaut** – gleiche Anordnung, Texte, Farben (CSS-Variablen = `FK`), Schriftgrößen, Radien, Abstände, Symbole. Nichts weglassen, nichts dazuerfinden. Langsam und präzise arbeiten; vor dem Bauen jeden Bildschirm mit dem Bild vergleichen. Abweichungen nur, wenn der Nutzer es sagt.
