@@ -4,12 +4,20 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// NPU (Hexagon): in GitHub Actions (CI=true) npu/build-npu.sh builds libggml-hexagon.so + libggml-htp-v*.so in the
+// Snapdragon toolchain image (Docker) into app/npu-libs. The app then uses the same NDK as that image, so llama.cpp,
+// the NPU part and libc++_shared fit together. Local builds and a failed NPU build = APK without NPU, as before.
+val npuScript = rootProject.file("npu/build-npu.sh")
+val npuNdk: String? = providers.gradleProperty("foldki.ndk").orNull?.takeIf { it.isNotBlank() }
+    ?: if (System.getenv("CI") == "true" && npuScript.exists()) runCatching {
+        providers.exec { commandLine("bash", npuScript.path, "ndk"); isIgnoreExitValue = true }
+            .standardOutput.asText.get().trim().takeIf { Regex("""\d+\.\d+\.\d+""").matches(it) }
+    }.getOrNull() else null
+
 android {
     namespace = "de.foldki.app"
     compileSdk = 36
-    // NPU (Hexagon): the CI builds libggml-hexagon.so in the Snapdragon toolchain image and passes its NDK version,
-    // so llama.cpp, the NPU part and libc++_shared come from the same NDK. Local builds keep the default NDK.
-    providers.gradleProperty("foldki.ndk").orNull?.takeIf { it.isNotBlank() }?.let { ndkVersion = it }
+    npuNdk?.let { ndkVersion = it }
 
     defaultConfig {
         applicationId = "de.foldki.app"
@@ -137,6 +145,14 @@ dependencies {
     // Real org.json for JVM unit tests (android.jar only has stubs)
     testImplementation("org.json:json:20240303")
 }
+
+// NPU part: built once per CI run before the native libraries are packed (never fails the APK build).
+val buildNpuLibs = tasks.register<Exec>("buildNpuLibs") {
+    onlyIf { npuNdk != null && System.getenv("CI") == "true" }
+    commandLine("bash", npuScript.path, "build", file("npu-libs").path)
+    isIgnoreExitValue = true
+}
+tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(buildNpuLibs) }
 
 // Run the JVM unit tests (e.g. DocumentParser) in every CI build without touching the workflow.
 tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn("testReleaseUnitTest") }
