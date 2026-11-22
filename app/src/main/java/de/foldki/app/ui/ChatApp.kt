@@ -480,8 +480,8 @@ private fun TopBar(ui: UiState, showMenu: Boolean, onMenu: () -> Unit, sidebar: 
             }
         }
         Box(Modifier.size(36.dp)) {
-            if (empty && (showMenu || (sidebar != null && !sidebar.open))) NavBtn(Icons.Default.Edit, "Neuer Chat", onClick = onNew)
-            else if (!empty) NavBtn(Icons.Default.MoreVert, "Chat-Einstellungen", onClick = onOptions)
+            // Immer ⋮ (Chat-Optionen), auch im leeren Chat – z. B. um „Denken“ vor der ersten Frage einzustellen. Neuer Chat: Menü.
+            NavBtn(Icons.Default.MoreVert, "Chat-Einstellungen", onClick = onOptions)
         }
     }
 }
