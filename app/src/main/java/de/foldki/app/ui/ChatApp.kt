@@ -167,6 +167,12 @@ fun ChatApp(vm: ChatViewModel) {
     val brief by vm.brief.collectAsStateWithLifecycle()
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    // Opening the menu (☰ or swipe) closes the keyboard – it must not stay open over the menu.
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    LaunchedEffect(drawer.targetValue) {
+        if (drawer.targetValue == DrawerValue.Open) { focus.clearFocus(force = true); keyboard?.hide() }
+    }
     BoxWithConstraints(Modifier.fillMaxSize().background(FK.Bg)) {
         val wide = maxWidth >= 600.dp // Fold7 unfolded / tablets: two panes with a draggable divider
         if (wide) {
@@ -269,7 +275,9 @@ private fun dayGroup(t: Long): String {
 @Composable
 private fun MenuPanel(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, onPicked: () -> Unit, onClose: (() -> Unit)?) {
     var query by rememberSaveable { mutableStateOf("") }
+    var confirmDelete by remember { mutableStateOf<Conversation?>(null) }
     val go: (String) -> Unit = { onPage(it); onPicked() }
+    confirmDelete?.let { c -> DeleteChatDialog(c, onDelete = { vm.delete(c.id); confirmDelete = null }, onDismiss = { confirmDelete = null }) }
     Column(Modifier.fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -287,7 +295,7 @@ private fun MenuPanel(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, 
             if (query.isNotBlank()) {
                 val q = query.trim().lowercase()
                 ui.conversations.filter { c -> c.title.lowercase().contains(q) || c.messages.any { it.text.lowercase().contains(q) } }.take(50).forEach { c ->
-                    ChatListItem(c, selected = c.id == ui.currentId) { vm.open(c.id); onPicked() }
+                    ChatListItem(c, selected = c.id == ui.currentId, onLong = { confirmDelete = c }) { vm.open(c.id); onPicked() }
                 }
             } else {
                 MenuHead("Chats")
@@ -341,16 +349,20 @@ private fun ChatListPane(ui: UiState, vm: ChatViewModel, onMenu: () -> Unit, onC
         }
         ModelFoot(ui, trailing = "⚙︎", modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 20.dp), onClick = onMenu)
     }
-    confirmDelete?.let { c ->
-        AlertDialog(
-            onDismissRequest = { confirmDelete = null },
-            containerColor = FK.Surface,
-            title = { Text("Chat löschen?", color = FK.Text) },
-            text = { Text("„${c.title}“ wird vom Handy gelöscht.", color = FK.Muted) },
-            confirmButton = { TextButton(onClick = { vm.delete(c.id); confirmDelete = null }) { Text("Löschen", color = FK.Danger) } },
-            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Abbrechen", color = FK.Accent) } },
-        )
-    }
+    confirmDelete?.let { c -> DeleteChatDialog(c, onDelete = { vm.delete(c.id); confirmDelete = null }, onDismiss = { confirmDelete = null }) }
+}
+
+/** "Chat löschen?" – the same everywhere (chat list, menu search, Verlauf). */
+@Composable
+fun DeleteChatDialog(c: Conversation, onDelete: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = FK.Surface,
+        title = { Text("Chat löschen?", color = FK.Text) },
+        text = { Text("„${c.title}“ wird vom Handy gelöscht.", color = FK.Muted) },
+        confirmButton = { TextButton(onClick = onDelete) { Text("Löschen", color = FK.Danger) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen", color = FK.Accent) } },
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -388,7 +400,7 @@ private fun ModelFoot(ui: UiState, trailing: String, modifier: Modifier, onClick
                 Spacer(Modifier.width(4.dp))
                 Text(
                     listOfNotNull(
-                        when { ui.usesNano -> "AICore"; ui.activeServer != null -> "PC"; else -> ui.backend.ifBlank { "GPU" } },
+                        when { ui.usesNano -> "AICore"; ui.activeServer != null -> "PC"; else -> ui.backend.ifBlank { "nicht geladen" } },
                         ui.activeLocal?.let { LocalModelManager.gb(it.size) },
                     ).joinToString(" · "),
                     fontSize = 13.sp, color = FK.Muted,
@@ -471,7 +483,7 @@ private fun TopBar(ui: UiState, showMenu: Boolean, onMenu: () -> Unit, sidebar: 
                     Spacer(Modifier.width(4.dp))
                     Text(
                         listOf(
-                            when { ui.usesNano -> "AICore"; ui.activeServer != null -> "PC"; else -> ui.backend.ifBlank { "GPU" } },
+                            when { ui.usesNano -> "AICore"; ui.activeServer != null -> "PC"; else -> ui.backend.ifBlank { "nicht geladen" } },
                             if (ui.webSearch) "Web" else if (ui.activeServer != null) "WLAN" else "offline",
                         ).joinToString(" · "),
                         fontSize = 12.sp, color = FK.Muted,
@@ -781,6 +793,7 @@ private fun ChatScreen(
         save = { m -> vm.saveAnswer(m) },
         retry = { m -> vm.regenerate(m.id) },
         pdf = ui.pdfEnabled,
+        more = { vm.continueAnswer() },
     )
 
     if (voiceMode) {
@@ -810,7 +823,7 @@ private fun ChatScreen(
                 ) {
                     items(messages, key = { it.id }) { m ->
                         val typing = ui.generating && m === messages.last() && m.role == Role.ASSISTANT
-                        MessageRow(m, typing = typing, actions = actions, liveCpu = if (typing) ui.liveCpu else -1,
+                        MessageRow(if (m.cut && m !== messages.last()) m.copy(cut = false) else m, typing = typing, actions = actions, liveCpu = if (typing) ui.liveCpu else -1,
                             showThoughts = ui.showThoughts, showStats = ui.showStats)
                     }
                 }
@@ -839,6 +852,8 @@ private class MessageActions(
     val save: (ChatMessage) -> Unit = {},
     val retry: (ChatMessage) -> Unit = {},
     val pdf: Boolean = true,
+    /** „Weiterschreiben“ under an answer cut at the length limit. */
+    val more: () -> Unit = {},
 )
 
 // ---------------------------------------------------------------- Attachment sheet (image 3)
@@ -946,6 +961,7 @@ private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions,
                     TextAction("☆ Merken") { actions.save(m) }
                     TextAction("↻") { actions.retry(m) }
                 }
+                if (m.cut) TextAction("➜ Weiterschreiben") { actions.more() }
             }
         }
     }
