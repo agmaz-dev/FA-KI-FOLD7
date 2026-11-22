@@ -546,6 +546,7 @@ private fun ChatOptionsSheet(ui: UiState, vm: ChatViewModel, onDismiss: () -> Un
                         RowValue(if (cur.tokens == 0) "frei" else "bis ${cur.tokens} Tokens")
                     }
                     FkSlider(l, { l = it }, 0f..3f, steps = 2, onDone = { vm.setAnswerLength(ls[l.toInt().coerceIn(0, 3)]) })
+                    ThinkSetting()
                 }
             }
             SectionLabel("Ansicht")
