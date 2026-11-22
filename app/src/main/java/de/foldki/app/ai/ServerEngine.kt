@@ -111,6 +111,25 @@ object ServerEngine {
         }.getOrDefault(emptyMap())
     }
 
+    /** Multi-step conversation (tools: GitHub, MCP) with the PC server's model. */
+    suspend fun session(s: PcServer, system: String, first: String, maxSteps: Int, onTurn: suspend (String) -> String?): Int {
+        val earlier = ArrayList<Pair<Boolean, String>>()
+        var next: String? = first
+        var step = 0
+        while (next != null && step < maxSteps) {
+            step++
+            val sb = StringBuilder()
+            chat(s, system, earlier.toList(), next, 0.3, 0).collect { sb.append(it) }
+            val answer = ThinkParser.answerOnly(sb.toString(), false)
+            de.foldki.app.data.DebugLog.write("PC-Server Werkzeug-Schritt $step: " + answer.replace("\n", "⏎").take(800))
+            earlier += true to next
+            earlier += false to answer
+            while (earlier.size > 2 && earlier.sumOf { it.second.length } > 40_000) { earlier.removeAt(0); earlier.removeAt(0) }
+            next = onTurn(answer)
+        }
+        return step
+    }
+
     /**
      * Streams the answer. Reasoning sent separately by the server ("reasoning_content") is wrapped in <think>…</think>,
      * so it shows up as "Gedanken" like with the models on the phone.

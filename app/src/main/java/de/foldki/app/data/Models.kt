@@ -53,6 +53,8 @@ data class ChatMessage(
     val cpuPct: Int = -1,
     /** How long the model thought before answering (ms), 0 = no thoughts. */
     val thinkMs: Long = 0,
+    /** The answer was cut at the length limit („Länge“) – shows „Weiterschreiben“. Not stored. */
+    val cut: Boolean = false,
 )
 
 data class Conversation(
