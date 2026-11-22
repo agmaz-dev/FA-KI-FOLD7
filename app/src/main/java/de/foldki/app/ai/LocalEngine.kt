@@ -71,6 +71,8 @@ class LocalEngine(context: Context) {
             mutex.withLock {
                 if (engine != null && loadedPath == modelPath) return@withLock backendUsed ?: "CPU"
                 closeNow()
+                // Qwen files without "gpu" in the name crash on the GPU (memory): blocked before loading.
+                if (preferGpu && GpuGuard.blocked(modelPath)) throw IllegalStateException(GpuGuard.TEXT)
                 val ctx = contextFor(modelPath)
                 var lastError: Throwable? = null
                 // GPU builds ("gpu" in the name) only run on the GPU – never silently on the CPU.

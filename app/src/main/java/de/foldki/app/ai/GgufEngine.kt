@@ -46,13 +46,23 @@ class GgufEngine(context: Context) {
     /** Characters of input that safely fit next to an answer. */
     val inputBudgetChars: Int get() = ((contextTokens - MAX_ANSWER_TOKENS / 2) * 2.5).toInt().coerceAtLeast(1000)
 
-    /** true = the NPU part (Hexagon) is in this APK. */
-    fun npuBuilt(): Boolean = LlamaNative.available &&
-        runCatching { LlamaNative.nativeNpuBuilt(app.applicationInfo.nativeLibraryDir.orEmpty()) }.getOrDefault(false)
+    private val prefs = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
-    /** Loads [path] with [gpuPercent] % of the layers on the GPU, or with [npu] all layers on the NPU. Returns "GPU x %", "NPU" or "CPU". */
-    fun loadAsync(path: String, gpuPercent: Int, npu: Boolean = false): Deferred<String> = synchronized(this) {
+    init {
+        // Crash guard for the NPU: the app died while a model loaded on the NPU -> NPU off (GPU share / CPU stay usable).
+        if (prefs.getBoolean(KEY_NPU_LOADING, false)) {
+            prefs.edit().putBoolean(KEY_NPU_LOADING, false).putBoolean("npu", false).commit()
+            de.foldki.app.data.DebugLog.write("NPU: App wurde beim Laden auf der NPU beendet – NPU ausgeschaltet")
+        }
+    }
+
+    /**
+     * Loads [path] with [gpuPercent] % of the layers on the GPU. If "Auf der NPU rechnen" is on (Settings.npu, not with
+     * "Rechnen auf → CPU") and the NPU part is in this APK, all layers go to the NPU instead. Returns "GPU x %", "NPU" or "CPU".
+     */
+    fun loadAsync(path: String, gpuPercent: Int): Deferred<String> = synchronized(this) {
         loading?.takeIf { it.isActive }?.let { return it }
+        val npu = prefs.getBoolean("npu", false) && prefs.getString("gemma_backend", "GPU") != "CPU" && npuBuilt(app)
         loadScope.async {
             loadMutex.withLock {
                 if (loadedPath == path && loadedGpu == gpuPercent && loadedNpu == npu) return@withLock backendUsed ?: "CPU"
@@ -61,7 +71,10 @@ class GgufEngine(context: Context) {
                 genMutex.withLock {
                     if (loadedPath != null) { LlamaNative.nativeUnload(); loadedPath = null; loadedGpu = -1; loadedNpu = false; backendUsed = null }
                     val threads = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 4)
-                    if (!LlamaNative.nativeLoad(path, N_CTX, threads, gpuPercent.coerceIn(0, 100), npu)) {
+                    if (npu) { de.foldki.app.data.DebugLog.write("LADE auf NPU (Hexagon HTP0)"); prefs.edit().putBoolean(KEY_NPU_LOADING, true).commit() }
+                    val ok = LlamaNative.nativeLoad(path, N_CTX, threads, gpuPercent.coerceIn(0, 100), npu)
+                    if (npu) prefs.edit().putBoolean(KEY_NPU_LOADING, false).commit()
+                    if (!ok) {
                         if (npu) { lastNpuReport = LlamaNative.nativeNpuReport().trim(); de.foldki.app.data.DebugLog.write("NPU-Bericht:\n$lastNpuReport") }
                         throw IllegalStateException(LlamaNative.nativeError().ifBlank { "GGUF-Modell konnte nicht geladen werden." })
                     }
@@ -85,10 +98,6 @@ class GgufEngine(context: Context) {
             }
         }.also { loading = it }
     }
-
-    /** Report of the last load with NPU (for the Fehlerbericht and the NPU page). */
-    @Volatile var lastNpuReport: String = ""
-        private set
 
     /**
      * Chat answer, raw text (thinking included). [system] blank = no system message. [maxTokens] 0 = [MAX_ANSWER_TOKENS].
@@ -148,6 +157,16 @@ class GgufEngine(context: Context) {
     }
 
     companion object {
+        private const val KEY_NPU_LOADING = "npu_loading"
+
+        /** Report of the last load with NPU ("Hexagon Arch version v79", rejected operations) for the Modelle page. */
+        @Volatile var lastNpuReport: String = ""
+            private set
+
+        /** true = the NPU part (Hexagon) is in this APK. */
+        fun npuBuilt(context: Context): Boolean = LlamaNative.available &&
+            runCatching { LlamaNative.nativeNpuBuilt(context.applicationInfo.nativeLibraryDir.orEmpty()) }.getOrDefault(false)
+
         const val N_CTX = 8192
         const val MAX_ANSWER_TOKENS = 4000
         const val THINK_BUDGET = 1200
