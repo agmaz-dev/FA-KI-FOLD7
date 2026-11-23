@@ -23,8 +23,8 @@ android {
         applicationId = "de.foldki.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 52
-        versionName = "4.8"
+        versionCode = 53
+        versionName = "4.9"
         // Galaxy Z Fold7 and all current phones are 64-bit ARM; keeps the APK small.
         ndk { abiFilters += "arm64-v8a" }
         // GGUF models: llama.cpp (from FA Fold KI), always optimised, 16 KB pages, shared C++ runtime
@@ -73,6 +73,8 @@ android {
     // NPU part (libggml-hexagon.so + DSP libraries libggml-htp-v73…v85.so), built by GitHub Actions into app/npu-libs.
     // Missing folder (local build or failed NPU build) = APK without NPU; GPU/CPU work as before.
     sourceSets["main"].jniLibs.srcDir("npu-libs")
+    // Phonon (ab 4.9): libptts_ffi.so, built by GitHub Actions into app/phonon-libs (missing = APK without Phonon).
+    sourceSets["main"].jniLibs.srcDir("phonon-libs")
 
     packaging {
         jniLibs {
@@ -121,6 +123,10 @@ dependencies {
 
     // Gemini Nano on-device (ML Kit GenAI Prompt API, via Android AICore)
     implementation("com.google.mlkit:genai-prompt:1.0.0-beta1")
+    // Live dictation (ab 4.9): ML Kit GenAI speech recognition on the phone, no Google window
+    implementation("com.google.mlkit:genai-speech-recognition:1.0.0-alpha1")
+    // Phonon voice (ab 4.9): calls libptts_ffi.so through JNA, like xn-ptts' PhononTTS.kt
+    implementation("net.java.dev.jna:jna:5.17.0@aar")
 
     // Optional Gemma 4 E2B on-device (LiteRT-LM). Pinned; needs Kotlin >= 2.3 (metadata 2.4).
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.19.1")
@@ -153,6 +159,15 @@ val buildNpuLibs = tasks.register<Exec>("buildNpuLibs") {
     isIgnoreExitValue = true
 }
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(buildNpuLibs) }
+
+// Phonon part (ab 4.9): built once per CI run with Rust + the runner's Android NDK (never fails the APK build).
+val phononScript = rootProject.file("phonon/build-phonon.sh")
+val buildPhononLibs = tasks.register<Exec>("buildPhononLibs") {
+    onlyIf { System.getenv("CI") == "true" && phononScript.exists() }
+    commandLine("bash", phononScript.path, file("phonon-libs").path)
+    isIgnoreExitValue = true
+}
+tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(buildPhononLibs) }
 
 // Run the JVM unit tests (e.g. DocumentParser) in every CI build without touching the workflow.
 tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn("testReleaseUnitTest") }

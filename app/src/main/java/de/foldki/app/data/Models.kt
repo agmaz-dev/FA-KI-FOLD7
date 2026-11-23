@@ -55,6 +55,8 @@ data class ChatMessage(
     val thinkMs: Long = 0,
     /** The answer was cut at the length limit („Länge“) – shows „Weiterschreiben“. Not stored. */
     val cut: Boolean = false,
+    /** Time until the first word (ms), shown in the stats line like Google AI Edge Gallery; 0 = unknown. */
+    val firstMs: Long = 0,
 )
 
 data class Conversation(
