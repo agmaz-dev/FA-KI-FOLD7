@@ -39,6 +39,7 @@ class ChatStore(context: Context) {
                             backend = m.optString("backend"),
                             cpuPct = m.optInt("cpuPct", -1),
                             thinkMs = m.optLong("thinkMs"),
+                            firstMs = m.optLong("firstMs"),
                             attachments = m.optJSONArray("attachments")?.let { a ->
                                 (0 until a.length()).map { k ->
                                     val x = a.getJSONObject(k)
@@ -81,6 +82,7 @@ class ChatStore(context: Context) {
                     if (m.backend.isNotEmpty()) put("backend", m.backend)
                     if (m.cpuPct >= 0) put("cpuPct", m.cpuPct)
                     if (m.thinkMs > 0) put("thinkMs", m.thinkMs)
+                    if (m.firstMs > 0) put("firstMs", m.firstMs)
                     put("attachments", JSONArray().apply {
                         m.attachments.forEach { a ->
                             put(JSONObject().apply {

@@ -14,11 +14,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 
 /**
- * Voice in and out, fully on the phone and independent of Samsung/Google speech services:
- * - listening: own microphone recording + Whisper (like ChatGPT/Grok)
- * - speaking: Supertonic, only the voices Tessa and Caleb
+ * Voice in and out, fully on the phone:
+ * - listening (ab 4.9): live dictation with ML Kit (words appear while speaking, no Google window, no click) – or the own
+ *   microphone recording + Whisper where live dictation is not available or switched off
+ * - speaking (ab 4.9): Phonon with Anton (like FA KI Desktop); Supertonic only while Phonon is not set up
  */
 class VoiceController(context: Context) {
     private val app = context.applicationContext
@@ -27,12 +29,34 @@ class VoiceController(context: Context) {
 
     val supertonic = Supertonic(app)
     val whisper = WhisperStt(app)
+    val phonon = Phonon(app)
+    val live = LiveStt()
 
     var supertonicVoice: String = Supertonic.DEFAULT_VOICE
+    var phononVoice: String = Phonon.DEFAULT_VOICE
     var rate: Float = 1f
+    /** Live dictation wanted (setting); used when ML Kit is available on this phone. */
+    var useLive: Boolean = true
+
+    /** ML Kit live dictation is on this phone (checked once at start, again after a download). */
+    private val _liveOk = MutableStateFlow(false)
+    val liveOk: StateFlow<Boolean> = _liveOk.asStateFlow()
+    init { scope.launch { _liveOk.value = runCatching { live.isAvailable() }.getOrDefault(false) } }
+    fun recheckLive() { scope.launch { _liveOk.value = runCatching { live.isAvailable() }.getOrDefault(false) } }
+
+    /** Phonon is used as soon as it is set up. */
+    val usesPhonon: Boolean get() = phonon.isReady
+    /** Something can read aloud. */
+    val canSpeak: Boolean get() = phonon.isReady || supertonic.isReady
+    /** Something can listen. */
+    val canListen: Boolean get() = (useLive && _liveOk.value) || whisper.isReady
+
+    /** Name of the voice that reads aloud (settings overview). */
+    val voiceLabel: String get() = if (phonon.isReady) Phonon.voiceOf(phononVoice).name
+        else if (supertonic.isReady) (Supertonic.VOICES[supertonicVoice]?.second?.substringBefore(" (") ?: "Tessa") else "nicht eingerichtet"
 
     /** Both models downloaded (one-time setup). */
-    val isReady: Boolean get() = supertonic.isReady && whisper.isReady
+    val isReady: Boolean get() = canSpeak && canListen
 
     /** What the microphone side is doing right now (drives buttons, so nothing can hang). */
     enum class ListenPhase { IDLE, RECORDING, TRANSCRIBING }
@@ -56,12 +80,41 @@ class VoiceController(context: Context) {
      */
     fun listen(
         onFinal: (String) -> Unit, onError: (String) -> Unit,
-        onLevel: (Float) -> Unit = {}, onTranscribing: () -> Unit = {}, onEnd: () -> Unit = {},
+        onLevel: (Float) -> Unit = {}, onTranscribing: () -> Unit = {}, onEnd: () -> Unit = {}, onPartial: (String) -> Unit = {},
     ) {
         stopSpeaking()
         val previous = listenJob
         previous?.cancel()
         val id = ++session
+        if (useLive && _liveOk.value) {
+            stopRequested = false
+            _listenPhase.value = ListenPhase.RECORDING
+            listenJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    previous?.join()
+                    requestFocus()
+                    val text = live.listen(
+                        level = { l -> scope.launch { if (id == session) onLevel(l) } },
+                        onPartial = { t -> if (id == session) onPartial(t) },
+                        stopNow = { stopRequested || id != session },
+                    )
+                    abandonFocus()
+                    if (id == session) onFinal(text)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    // Live dictation failed (e.g. no German model): from now on Whisper, if it is set up.
+                    android.util.Log.w("FoldKI", "Live-Diktat: ${e.message}")
+                    _liveOk.value = false
+                    if (id == session) onError(if (whisper.isReady) "Live-Diktat ging nicht – bitte nochmal tippen (jetzt mit Whisper)." else "Spracheingabe fehlgeschlagen: ${e.message ?: e.javaClass.simpleName}")
+                } finally {
+                    abandonFocus()
+                    if (id == session) _listenPhase.value = ListenPhase.IDLE
+                    onEnd()
+                }
+            }
+            return
+        }
         if (!whisper.isReady) {
             _listenPhase.value = ListenPhase.IDLE
             onError("Bitte zuerst die Sprachfunktion einrichten (Einstellungen)."); onEnd(); return
@@ -117,11 +170,54 @@ class VoiceController(context: Context) {
     /** Reads [text] aloud with Tessa or Caleb; [onDone] runs afterwards. */
     fun speak(text: String, onDone: () -> Unit = {}) {
         stopSpeaking()
-        if (text.isBlank() || !supertonic.isReady) { onDone(); return }
-        supertonic.speak(text, supertonicVoice, rate, onDone) { err ->
+        if (text.isBlank() || !canSpeak) { onDone(); return }
+        if (phonon.isReady) phonon.speak(text, phononVoice, rate, onDone) { err -> android.util.Log.w("FoldKI", "Phonon: $err") }
+        else supertonic.speak(text, supertonicVoice, rate, onDone) { err ->
             android.util.Log.w("FoldKI", "Supertonic: $err")
             onDone()
         }
+    }
+
+    // ---- Anruf-Modus (ab 4.9): sentences are spoken while the model still writes ----
+    private var queue = kotlinx.coroutines.channels.Channel<String>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+    private var queueJob: Job? = null
+    @Volatile private var queued = 0
+    /** Changes with every clearQueue(), so a stopped job does not count down the new queue. */
+    @Volatile private var queueGen = 0
+
+    /** Adds one sentence; it is spoken right after the ones before it. */
+    fun enqueue(sentence: String) {
+        if (sentence.isBlank() || !canSpeak) return
+        queued++
+        queue.trySend(sentence)
+        val myGen = queueGen
+        val ch = queue
+        if (queueJob?.isActive != true) queueJob = scope.launch {
+            for (s in ch) {
+                try {
+                    if (phonon.isReady) phonon.speakAndWait(s, phononVoice, rate)
+                    else kotlinx.coroutines.suspendCancellableCoroutine<Unit> { c ->
+                        supertonic.speak(s, supertonicVoice, rate, { if (c.isActive) c.resume(Unit) }) { if (c.isActive) c.resume(Unit) }
+                    }
+                } finally { if (myGen == queueGen && queued > 0) queued-- }
+            }
+        }
+    }
+
+    /** true while queued sentences are still being spoken. */
+    val queueBusy: Boolean get() = queued > 0
+
+    private fun clearQueue() {
+        queueGen++
+        queueJob?.cancel(); queueJob = null
+        queue.close()
+        queue = kotlinx.coroutines.channels.Channel(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        queued = 0
+    }
+
+    fun previewPhonon(voice: String, onError: (String) -> Unit) {
+        stopSpeaking()
+        phonon.speak("Hallo, ich bin ${Phonon.voiceOf(voice).name}. Wie kann ich dir helfen?", voice, rate, {}, onError)
     }
 
     fun previewSupertonic(voice: String, onError: (String) -> Unit) {
@@ -130,17 +226,17 @@ class VoiceController(context: Context) {
         supertonic.speak("Hallo, ich bin $name. Wie kann ich dir helfen?", voice, rate, {}, onError)
     }
 
-    val isSpeaking: Boolean get() = supertonic.isPlaying
+    val isSpeaking: Boolean get() = supertonic.isPlaying || phonon.isPlaying || queued > 0
 
-    fun stopSpeaking() = supertonic.stop()
+    fun stopSpeaking() { clearQueue(); supertonic.stop(); phonon.stop() }
 
-    fun release() { stopAll(); whisper.release() }
+    fun release() { stopAll(); whisper.release(); phonon.release(); live.close() }
 
     /** Keeps Whisper loaded so the first dictation does not wait for the model (~250 MB RAM). */
     fun prewarm() { if (whisper.isReady && !whisper.isLoaded) scope.launch { whisper.warmUp() } }
 
     /** Android needs memory: free Whisper unless it is in use; it loads again when needed. */
-    fun trimMemory() { if (_listenPhase.value == ListenPhase.IDLE) whisper.release() }
+    fun trimMemory() { if (_listenPhase.value == ListenPhase.IDLE) whisper.release(); if (!isSpeaking) phonon.release() }
 
     /** Pauses music (e.g. Spotify) while listening, like other assistant apps do. */
     private fun requestFocus() {
