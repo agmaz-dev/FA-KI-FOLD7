@@ -28,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,6 +53,7 @@ import de.foldki.app.data.Settings
 @Composable
 fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openNano: () -> Unit) {
     var confirmDelete by remember { mutableStateOf<LocalModelManager.LocalModel?>(null) }
+    var paramsFor by remember { mutableStateOf<LocalModelManager.LocalModel?>(null) }
     var bigWarning by remember { mutableStateOf<HfModels.LmFile?>(null) }
     val st = ui.modelOp
     val free = remember(st, ui.localModels) { vm.models.freeBytes() }
@@ -158,6 +160,8 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
                         else " · braucht ~${"%.0f".format(java.util.Locale.GERMANY, kotlin.math.ceil(m.size * 1.15 / 1e9))} GB RAM",
                     fontSize = 13.sp, color = FK.Muted, modifier = Modifier.weight(1f),
                 )
+                Cta("Einstellungen", ghost = true) { paramsFor = m }
+                Spacer(Modifier.width(8.dp))
                 if (active) Cta("Löschen", ghost = true) { confirmDelete = m } else Cta("Laden") { vm.selectModel(m.file) }
             }
         }
@@ -191,6 +195,18 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
             }, enabled = npuBuilt)
         }
     }
+    if (npuBuilt) {
+        var power by remember { mutableStateOf(vm.settings.npuPower) }
+        Group {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text("NPU-Leistung", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = FK.Text)
+                Note("Sparsam bleibt kühl, Maximal ist am schnellsten und wird warm. Gilt ab dem nächsten App-Start.", Modifier.padding(top = 2.dp, bottom = 10.dp))
+                val modes = listOf("power_saver", "balanced", "burst")
+                Segmented(listOf("Sparsam", "Ausgewogen", "Maximal"), modes.indexOf(power).coerceAtLeast(1)) { i -> power = modes[i]; vm.setNpuPower(modes[i]) }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+    }
     if (npu && npuBuilt) Sub("Klappt die NPU nicht, rechnet das Modell auf dem Prozessor; der Grund steht unten und im Fehlerbericht. Mit „Rechnen auf → CPU“ ist die NPU aus.")
     val npuReport = remember(ui.backend) { de.foldki.app.ai.GgufEngine.lastNpuReport }
     if (npuReport.isNotBlank()) {
@@ -209,6 +225,63 @@ fun ModelSettings(vm: ChatViewModel, ui: UiState, openBrowser: () -> Unit, openN
         )
     }
     bigWarning?.let { f -> BigModelWarning(f, ram, onDismiss = { bigWarning = null }) { bigWarning = null; vm.downloadModel(f) } }
+    paramsFor?.let { m -> ModelParamsDialog(vm, m, onDismiss = { paramsFor = null }) }
+}
+
+/**
+ * Ab 4.9: settings of one model like in Google AI Edge Gallery – maximum tokens, Top-K, Top-P, temperature, thinking and
+ * (LiteRT) context. "Empfohlen" = the values the app uses by itself (Qwen: Top-K 20, Top-P 0.8, temperature 0.7, no thinking).
+ */
+@Composable
+private fun ModelParamsDialog(vm: ChatViewModel, m: LocalModelManager.LocalModel, onDismiss: () -> Unit) {
+    val start = remember(m.file) { vm.settings.modelParams(m.file) }
+    var maxTok by remember { mutableStateOf(start.maxTokens.toFloat()) }
+    var topK by remember { mutableStateOf(start.topK.toFloat()) }
+    var topP by remember { mutableStateOf(start.topP) }
+    var temp by remember { mutableStateOf(start.temperature) }
+    var think by remember { mutableStateOf(start.think) }
+    var ctx by remember { mutableStateOf(start.context) }
+    val gguf = HfModels.isGguf(m.file)
+    val loc = java.util.Locale.GERMANY
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = FK.Surface,
+        title = { Text(m.name, color = FK.Text, fontWeight = FontWeight.SemiBold, maxLines = 2) },
+        text = {
+            Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())) {
+                ParamSlider("Höchstens Tokens", if (maxTok < 1f) "ohne Grenze" else "${maxTok.toInt()}", maxTok, 0f..4000f, 15) { maxTok = (it / 250).toInt() * 250f }
+                ParamSlider("Top-K", if (topK < 1f) "Standard" else "${topK.toInt()}", topK, 0f..100f, 19) { topK = (it / 5).toInt() * 5f }
+                ParamSlider("Top-P", if (topP <= 0f) "Standard" else "%.2f".format(loc, topP), topP, 0f..1f, 19) { topP = (it * 20).toInt() / 20f }
+                ParamSlider("Temperatur", if (temp < 0f) "wie Kreativität im Chat" else "%.1f".format(loc, temp), temp, -0.1f..1.5f, 15) { temp = if (it < 0f) -1f else (it * 10).toInt() / 10f }
+                Text("Denken", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = FK.Text, modifier = Modifier.padding(top = 10.dp, bottom = 6.dp))
+                Segmented(listOf("Standard", "Aus", "An"), when (think) { "off" -> 1; "on" -> 2; else -> 0 }) { think = listOf("", "off", "on")[it] }
+                if (!gguf) {
+                    Text("Kontext", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = FK.Text, modifier = Modifier.padding(top = 14.dp, bottom = 6.dp))
+                    val opts = listOf(0, 2048, 4096, 8192)
+                    Segmented(listOf("Datei", "2048", "4096", "8192"), opts.indexOf(ctx).coerceAtLeast(0)) { ctx = opts[it] }
+                    Note("Weniger Kontext braucht weniger Arbeitsspeicher, merkt sich aber weniger vom Chat.", Modifier.padding(top = 6.dp))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                vm.saveModelParams(m.file, de.foldki.app.data.ModelParams(maxTok.toInt(), topK.toInt(), topP, temp, think, ctx))
+                onDismiss()
+            }) { Text("Sichern", color = FK.Accent) }
+        },
+        dismissButton = {
+            TextButton(onClick = { vm.saveModelParams(m.file, null); onDismiss() }) { Text("Empfohlen", color = FK.Muted) }
+        },
+    )
+}
+
+@Composable
+private fun ParamSlider(label: String, value: String, v: Float, range: ClosedFloatingPointRange<Float>, steps: Int, onChange: (Float) -> Unit) {
+    Row(Modifier.padding(top = 8.dp)) {
+        Text(label, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = FK.Text, modifier = Modifier.weight(1f))
+        RowValue(value)
+    }
+    FkSlider(v.coerceIn(range.start, range.endInclusive), onChange, range, steps = steps)
 }
 
 /** Warning before a model that is probably too big for the phone's RAM (Galaxy Z Fold 7: 12 GB). */

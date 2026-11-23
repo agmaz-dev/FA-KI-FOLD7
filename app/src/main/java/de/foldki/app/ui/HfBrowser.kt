@@ -35,6 +35,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -83,10 +89,10 @@ fun HfBrowser(vm: ChatViewModel, ui: UiState, onDone: () -> Unit) {
     var web by rememberSaveable { mutableStateOf(false) }
     var detail by rememberSaveable { mutableStateOf<String?>(null) }
     // Top bar like mock-up 9: "huggingface.co" on the right; on the web page ‹ goes back to the search.
-    if (web) PageBack({ web = false }, hideTitle = true)
+    if (web) PageBack({ web = false }, hideTitle = true, hideBar = true)
     else PageAction { Cta("huggingface.co", ghost = true) { web = true } }
     Box(Modifier.fillMaxSize()) {
-        if (web) WebMode(vm, onOpen = { repo -> detail = repo; web = false })
+        if (web) WebMode(vm, onOpen = { repo -> detail = repo; web = false }, onClose = { web = false })
         else SearchMode(vm, ui, detail, onDetail = { detail = it })
     }
 }
@@ -94,6 +100,10 @@ fun HfBrowser(vm: ChatViewModel, ui: UiState, onDone: () -> Unit) {
 // ---------------------------------------------------------------- Suche
 
 private val FILTERS = listOf("Beliebt", "Neu", "Klein", "Denken", "Bilder")
+
+/** Ab 4.9: only chat models – embedding, speech, vision-encoder and similar models cannot answer in the chat. */
+private val NOT_CHAT = Regex("embed|parakeet|whisper|\\btts\\b|asr|speech|rerank|siglip|clip|mobilenet|efficientnet|yolo|segment|depth|vit-|-vit|wav2vec|moonshine|kokoro|piper|bert", RegexOption.IGNORE_CASE)
+private fun chatModel(r: HfModels.Repo): Boolean = !NOT_CHAT.containsMatchIn(r.id)
 
 /** Small model: at most 2 B parameters (from the name). */
 private fun small(r: HfModels.Repo): Boolean {
@@ -139,7 +149,7 @@ private fun SearchMode(vm: ChatViewModel, ui: UiState, detail: String?, onDetail
                     else -> {
                         val q = query.trim().lowercase()
                         val shown = all.filter { r ->
-                            (q.isEmpty() || fmt == 1 || r.name.lowercase().contains(q)) && when (filter) {
+                            chatModel(r) && (q.isEmpty() || fmt == 1 || r.name.lowercase().contains(q)) && when (filter) {
                                 2 -> small(r); 3 -> "Denken" in r.features; 4 -> "Bilder" in r.features; else -> true
                             }
                         }
@@ -184,9 +194,10 @@ private fun RepoCard(r: HfModels.Repo, have: Boolean, active: Boolean, onClick: 
             .then(if (active) Modifier.border(1.5.dp, FK.Accent, shape) else Modifier).clickable(onClick = onClick).padding(14.dp),
     ) {
         ModelLogo(HfModels.vendorOf(r.id), 36.dp)
-        Text(HfModels.prettyName(r.name), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = FK.Text, maxLines = 2, overflow = TextOverflow.Ellipsis,
+        Text(HfModels.prettyName(r.name), fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 3, overflow = TextOverflow.Ellipsis, lineHeight = 19.sp,
             modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
-        Text(HfModels.vendorOf(r.id) + " · " + fmtNum(r.downloads) + " Downloads", fontSize = 12.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(HfModels.vendorOf(r.id), fontSize = 12.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(fmtNum(r.downloads) + " Downloads", fontSize = 12.sp, color = FK.Muted, maxLines = 1)
         androidx.compose.foundation.layout.FlowRow(
             Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -351,77 +362,134 @@ private fun ago(iso: String): String {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun WebMode(vm: ChatViewModel, onOpen: (String) -> Unit) {
+private fun WebMode(vm: ChatViewModel, onOpen: (String) -> Unit, onClose: () -> Unit) {
     var view by remember { mutableStateOf<WebView?>(null) }
     var url by remember { mutableStateOf("huggingface.co") }
+    // Ab 4.9: own address/search field (Compose) – typing, copying and pasting work here even where the web page's
+    // own fields do not show the text. Enter = open the address or search Hugging Face.
+    var field by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue("")) }
+    var editing by remember { mutableStateOf(false) }
     var canBack by remember { mutableStateOf(false) }
-    var canFwd by remember { mutableStateOf(false) }
     var repo by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
     BackHandler(enabled = canBack) { view?.goBack() }
 
-    // A tap on a .litertlm file: look up size + SHA-256 and download it.
+    // A tap on a .litertlm/.gguf file: look up size + SHA-256 and download it.
     val fileTapped: (String, String) -> Unit = { r, path ->
         scope.launch {
             val f = runCatching { withContext(Dispatchers.IO) { HfModels.fetchFiles(r) } }.getOrNull()?.firstOrNull { it.path == path }
             when {
-                f == null -> vm.notify("Datei nicht gefunden – öffne das Modell mit „In Fold KI laden“.")
-                !f.usable -> vm.notify("„${f.fileName}“ passt nicht zur App (nur .litertlm, nicht für Webbrowser).")
-                else -> { vm.downloadModel(f); vm.notify("Download gestartet: ${f.fileName} – Stand unter KI-Modelle.") }
+                f == null -> vm.notify("Datei nicht gefunden – öffne das Modell mit „In App laden“.")
+                !f.usable -> vm.notify("„${f.fileName}“ passt nicht zur App (nur .litertlm oder einzelne .gguf, nicht für Webbrowser).")
+                else -> { vm.downloadModel(f); vm.notify("Download gestartet: ${f.fileName} – Stand unter Modelle.") }
             }
         }
     }
+    val go: () -> Unit = {
+        val t = field.text.trim()
+        if (t.isNotEmpty()) {
+            val target = when {
+                t.startsWith("http://") || t.startsWith("https://") -> t
+                t.startsWith("huggingface.co") || t.startsWith("hf.co") -> "https://$t"
+                Regex("^[\\w.-]+/[\\w.-]+$").matches(t) -> "https://huggingface.co/$t"
+                else -> HfModels.searchUrl(t)
+            }
+            view?.loadUrl(target)
+        }
+        editing = false
+        focus.clearFocus()
+    }
 
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { view?.goBack() }, enabled = canBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Zurück", tint = if (canBack) FK.Text else FK.Dim) }
-            IconButton(onClick = { view?.goForward() }, enabled = canFwd) { Icon(Icons.AutoMirrored.Filled.ArrowForward, "Vorwärts", tint = if (canFwd) FK.Text else FK.Dim) }
-            IconButton(onClick = { view?.reload() }) { Icon(Icons.Default.Refresh, "Neu laden", tint = FK.Text) }
-            Text(url, fontSize = 12.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        // One slim row: back, address (with copy / paste), close.
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            NavBtn(Icons.AutoMirrored.Filled.ArrowBack, "Zurück", bg = FK.Surface) { if (canBack) view?.goBack() else onClose() }
+            Spacer(Modifier.width(6.dp))
+            Row(
+                Modifier.weight(1f).height(40.dp).clip(RoundedCornerShape(20.dp)).background(FK.Surface)
+                    .border(1.5.dp, if (editing) FK.Accent else Color.Transparent, RoundedCornerShape(20.dp)).padding(start = 12.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.foundation.text.BasicTextField(
+                    value = if (editing) field else androidx.compose.ui.text.input.TextFieldValue(url),
+                    onValueChange = { field = it },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontFamily = Inter, fontSize = 14.sp, color = FK.Text),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(FK.Accent),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Go),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onGo = { go() }),
+                    modifier = Modifier.weight(1f).onFocusChanged { st ->
+                        if (st.isFocused && !editing) { editing = true; field = androidx.compose.ui.text.input.TextFieldValue(url, androidx.compose.ui.text.TextRange(0, url.length)) }
+                    },
+                )
+                Box(Modifier.size(32.dp).clip(CircleShape).clickable { clipboard.setText(androidx.compose.ui.text.AnnotatedString(if (editing) field.text else "https://$url")); vm.notify("Kopiert") },
+                    contentAlignment = Alignment.Center) { Icon(Icons.Default.ContentCopy, "Kopieren", tint = FK.Muted, modifier = Modifier.size(17.dp)) }
+                Box(Modifier.size(32.dp).clip(CircleShape).clickable {
+                    val t = clipboard.getText()?.text.orEmpty()
+                    if (t.isNotBlank()) { editing = true; field = androidx.compose.ui.text.input.TextFieldValue(t, androidx.compose.ui.text.TextRange(t.length)) }
+                }, contentAlignment = Alignment.Center) { Icon(Icons.Default.ContentPaste, "Einfügen", tint = FK.Muted, modifier = Modifier.size(17.dp)) }
+            }
+            Spacer(Modifier.width(6.dp))
+            if (editing) NavBtn(Icons.AutoMirrored.Filled.ArrowForward, "Öffnen", bg = FK.Accent, tint = Color.White) { go() }
+            else NavBtn(Icons.Default.Close, "Schließen", bg = FK.Surface) { onClose() }
         }
-        FkButton(
-            repo?.let { "„${it.substringAfter('/')}“ in Fold KI laden" } ?: "In Fold KI laden (Modellseite öffnen)",
-            Modifier.padding(horizontal = 14.dp, vertical = 4.dp), enabled = repo != null,
-        ) { repo?.let(onOpen) }
-        Note(
-            "Auf einer Modellseite „In Fold KI laden“ tippen, oder unter „Files“ direkt auf eine .litertlm-Datei.",
-            Modifier.padding(start = 18.dp, end = 18.dp, bottom = 6.dp),
-        )
-        HorizontalDivider(color = FK.Line)
-        AndroidView(
-            modifier = Modifier.weight(1f).fillMaxWidth(),
-            onRelease = { it.stopLoading(); it.destroy() },
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    settings.javaScriptEnabled = true // the Hugging Face pages need it
-                    settings.domStorageEnabled = true
-                    setBackgroundColor(android.graphics.Color.parseColor("#1C1B1A"))
-                    webViewClient = object : WebViewClient() {
-                        override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
-                            val u = request.url.toString()
-                            val r = HfModels.repoFromUrl(u)
-                            val path = HfModels.fileFromUrl(u)
-                            if (r != null && path != null) { fileTapped(r, path); return true }
-                            val host = request.url.host?.lowercase().orEmpty()
-                            // Stay on Hugging Face (no other sites inside the app).
-                            return !(host == "huggingface.co" || host.endsWith(".huggingface.co") || host == "hf.co")
-                        }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                onRelease = { it.stopLoading(); it.destroy() },
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        settings.javaScriptEnabled = true // the Hugging Face pages need it
+                        settings.domStorageEnabled = true
+                        // Fields of the web page get the keyboard and long-press menu (copy / paste).
+                        isFocusable = true
+                        isFocusableInTouchMode = true
+                        isLongClickable = true
+                        setOnTouchListener { v, e -> if (e.action == android.view.MotionEvent.ACTION_DOWN && !v.hasFocus()) v.requestFocus(); false }
+                        setBackgroundColor(android.graphics.Color.parseColor("#1C1B1A"))
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
+                                val u = request.url.toString()
+                                val r = HfModels.repoFromUrl(u)
+                                val path = HfModels.fileFromUrl(u)
+                                if (r != null && path != null) { fileTapped(r, path); return true }
+                                val host = request.url.host?.lowercase().orEmpty()
+                                // Stay on Hugging Face (no other sites inside the app).
+                                return !(host == "huggingface.co" || host.endsWith(".huggingface.co") || host == "hf.co")
+                            }
 
-                        override fun doUpdateVisitedHistory(v: WebView, u: String, isReload: Boolean) {
-                            canBack = v.canGoBack(); canFwd = v.canGoForward()
-                            url = u.removePrefix("https://")
-                            // HF is a single-page app: a tap on a model changes the address without a new page load.
-                            repo = HfModels.repoFromUrl(u)
+                            override fun doUpdateVisitedHistory(v: WebView, u: String, isReload: Boolean) {
+                                canBack = v.canGoBack()
+                                url = u.removePrefix("https://")
+                                // HF is a single-page app: a tap on a model changes the address without a new page load.
+                                repo = HfModels.repoFromUrl(u)
+                            }
                         }
+                        setDownloadListener { u, _, _, _, _ ->
+                            val r = HfModels.repoFromUrl(u); val p = HfModels.fileFromUrl(u)
+                            if (r != null && p != null) fileTapped(r, p)
+                        }
+                        loadUrl(HfModels.searchUrl(""))
+                        view = this
                     }
-                    setDownloadListener { u, _, _, _, _ ->
-                        val r = HfModels.repoFromUrl(u); val p = HfModels.fileFromUrl(u)
-                        if (r != null && p != null) fileTapped(r, p)
-                    }
-                    loadUrl(HfModels.searchUrl(""))
-                    view = this
+                },
+            )
+            // On a model page: a small bar at the bottom instead of the big button at the top.
+            val r = repo
+            if (r != null) Row(
+                Modifier.align(Alignment.BottomCenter).padding(12.dp).fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(FK.Surface2)
+                    .padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Modell erkannt", fontSize = 12.sp, color = FK.Muted)
+                    Text(r.substringAfter('/'), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-            },
-        )
+                Spacer(Modifier.width(8.dp))
+                Cta("In App laden") { onOpen(r) }
+            }
+        }
     }
 }
