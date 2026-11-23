@@ -72,6 +72,8 @@ fun VoiceOverlay(ui: UiState, vm: ChatViewModel, voice: VoiceController, onClose
     var level by remember { mutableFloatStateOf(0f) }
     // Every start/stop gets a new turn; late callbacks of an older turn are ignored (no double start).
     var turn by remember { mutableIntStateOf(0) }
+    // Characters of the current answer already handed to the voice (Anruf-Modus).
+    var spoken by remember { mutableIntStateOf(0) }
 
     fun startListening() {
         val my = ++turn
@@ -81,13 +83,14 @@ fun VoiceOverlay(ui: UiState, vm: ChatViewModel, voice: VoiceController, onClose
                 if (turn == my) {
                     level = 0f
                     if (t.isBlank()) { phase = Phase.PAUSED; info = "Nichts verstanden – tippe zum Sprechen." }
-                    else { heard = t; phase = Phase.THINKING; vm.send(t, voice = true) }
+                    else { heard = t; spoken = 0; phase = Phase.THINKING; vm.send(t, voice = true) }
                 }
             },
             onError = { msg -> if (turn == my) { level = 0f; phase = Phase.PAUSED; info = msg } },
             onLevel = { if (turn == my) level = it },
             onTranscribing = { if (turn == my) { level = 0f; phase = Phase.TRANSCRIBING } },
             onEnd = { if (turn == my) level = 0f },
+            onPartial = { t -> if (turn == my && t.isNotBlank()) heard = t },
         )
     }
 
@@ -104,16 +107,26 @@ fun VoiceOverlay(ui: UiState, vm: ChatViewModel, voice: VoiceController, onClose
     // App goes to the background (or the phone is locked): release microphone and speaker.
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { if (phase != Phase.PAUSED) stopAll() }
 
-    // When the answer is complete, read it aloud and then listen again.
-    LaunchedEffect(ui.generating) {
-        if (!ui.generating && phase == Phase.THINKING) {
-            val last = ui.current?.messages?.lastOrNull()
-            if (last != null && last.role == Role.ASSISTANT && !last.isError) {
-                phase = Phase.SPEAKING
-                val my = turn
-                voice.speak(DocumentParser.spoken(last.text)) { if (turn == my && phase == Phase.SPEAKING) startListening() }
-            } else {
-                phase = Phase.PAUSED; info = last?.text ?: "Keine Antwort."
+    // Ab 4.9 (Anruf-Modus): every finished sentence is spoken while the model still writes; then listen again.
+    val lastAnswer = ui.current?.messages?.lastOrNull()?.takeIf { it.role == Role.ASSISTANT }
+    LaunchedEffect(lastAnswer?.text, ui.generating, phase) {
+        if (phase != Phase.THINKING && phase != Phase.SPEAKING) return@LaunchedEffect
+        val a = lastAnswer ?: return@LaunchedEffect
+        if (a.isError) { if (!ui.generating) { phase = Phase.PAUSED; info = a.text }; return@LaunchedEffect }
+        val text = DocumentParser.spoken(a.text)
+        // Up to the last sentence end (while writing) or everything (when done).
+        val upTo = if (ui.generating) Regex("[.!?:](\\s|$)").findAll(text).lastOrNull()?.range?.last?.plus(1) ?: 0 else text.length
+        if (upTo > spoken && upTo <= text.length) {
+            val part = text.substring(spoken, upTo).trim()
+            spoken = upTo
+            if (part.isNotEmpty()) { phase = Phase.SPEAKING; voice.enqueue(part) }
+        }
+        if (!ui.generating && spoken >= text.length) {
+            val my = turn
+            // Wait until the queue has been spoken, then listen again.
+            while (voice.queueBusy && turn == my) kotlinx.coroutines.delay(150)
+            if (turn == my && (phase == Phase.SPEAKING || phase == Phase.THINKING)) {
+                if (text.isBlank()) { phase = Phase.PAUSED; info = "Keine Antwort." } else startListening()
             }
         }
     }
@@ -130,7 +143,7 @@ fun VoiceOverlay(ui: UiState, vm: ChatViewModel, voice: VoiceController, onClose
     val scale by animateFloatAsState(target, label = "scale")
 
     // Exactly like mock-up 14: ✕ / voice + model / ⚙ on top, pink orb in the middle, 🎙 and red ✕ below.
-    val voiceName = if (vm.settings.stVoice == "caleb") "Caleb" else "Tessa"
+    val voiceName = voice.voiceLabel
     Box(
         Modifier.fillMaxSize().background(FK.Bg)
             .background(androidx.compose.ui.graphics.Brush.radialGradient(

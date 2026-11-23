@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -78,12 +79,16 @@ class SplitPaneState(initialFraction: Float) {
     internal val hingeFraction: Float?
         get() = hingeXInWindow?.let { (it - leftInWindow) / widthPx }?.takeIf { widthPx > 0f && it in 0.15f..0.85f }
 
-    internal fun snapTarget(): Float {
+    /**
+     * Ab 4.9: snap points 0 (left closed), 1/3, hinge or 1/2, 2/3, 1 (right closed). A pane narrower than 3/4 of its
+     * minimum closes; a quick swipe ([velocity], px/s) goes on in its direction.
+     */
+    internal fun snapTarget(velocity: Float = 0f): Float {
         val w = widthPx
         if (w <= 0f) return fraction
         val x = fraction * w
-        if (x < minPx / 2) return 0f
-        if (x > w - minPx / 2) return 1f
+        if (x < minPx * 0.75f || (velocity < -1500f && x < w / 2)) return 0f
+        if (x > w - minPx * 0.75f || (velocity > 1500f && x > w / 2)) return 1f
         val points = listOf(1f / 3f, hingeFraction ?: 0.5f, 2f / 3f).map { (it * w).coerceIn(minPx, w - minPx) }
         return points.minBy { abs(it - x) } / w
     }
@@ -124,8 +129,8 @@ fun rememberSplitPaneState(initialFraction: Float): SplitPaneState = remember { 
 fun SplitPane(
     state: SplitPaneState,
     modifier: Modifier = Modifier,
-    minPaneWidth: Dp = 280.dp,
-    handleWidth: Dp = 16.dp,
+    minPaneWidth: Dp = 260.dp,
+    handleWidth: Dp = 24.dp,
     onSettled: (fraction: Float, collapse: PaneCollapse) -> Unit = { _, _ -> },
     first: @Composable () -> Unit,
     second: @Composable () -> Unit,
@@ -149,17 +154,26 @@ fun SplitPane(
         Box(
             Modifier.fillMaxHeight()
                 .semantics { contentDescription = "Trennlinie verschieben" }
+                // Ab 4.9: the Android back gesture at the screen edge must not take the drag (else a closed pane cannot be pulled back).
+                .systemGestureExclusion { c -> androidx.compose.ui.geometry.Rect(0f, c.size.height / 2f - 300f, c.size.width.toFloat(), c.size.height / 2f + 300f) }
                 .draggable(
                     dragState, Orientation.Horizontal,
                     onDragStarted = { state.anim?.cancel() },
-                    onDragStopped = { settleTo(state.snapTarget()) },
+                    onDragStopped = { v -> settleTo(state.snapTarget(v)) },
                 )
-                .pointerInput(Unit) { detectTapGestures(onDoubleTap = { settleTo(state.defaultTarget()) }) },
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        // A tap on the handle of a closed pane opens it again; a double tap resets to the default.
+                        onTap = { if (state.collapse != PaneCollapse.NONE) settleTo(state.defaultTarget()) },
+                        onDoubleTap = { settleTo(state.defaultTarget()) },
+                    )
+                },
         ) {
             Box(Modifier.align(Alignment.Center).width(1.dp).fillMaxHeight().background(MaterialTheme.colorScheme.outline))
+            // A bigger grip, easy to find and to grab – also when a pane is closed (then it sits at the edge).
             Box(
-                Modifier.align(Alignment.Center).size(width = 4.dp, height = 36.dp)
-                    .clip(RoundedCornerShape(2.dp)).background(MaterialTheme.colorScheme.onSurfaceVariant),
+                Modifier.align(Alignment.Center).size(width = 6.dp, height = 56.dp)
+                    .clip(RoundedCornerShape(3.dp)).background(MaterialTheme.colorScheme.onSurfaceVariant),
             )
         }
     }
@@ -176,9 +190,12 @@ fun SplitPane(
         val m = min(minPaneWidth.toPx(), (w - hp) / 2f).coerceAtLeast(0f)
         state.widthPx = w.toFloat(); state.minPx = m
         val x = state.fraction * w // read here (layout phase) -> no recomposition while dragging
+        // Settled positions keep the minimum width; while dragging the divider follows the finger all the way.
+        val dragging = state.anim?.isActive != true && x > 0f && x < w && (x < m || x > w - m)
         val eff = when {
-            x < m / 2 -> 0f
-            x > w - m / 2 -> w.toFloat()
+            x <= 0f -> 0f
+            x >= w -> w.toFloat()
+            dragging -> x
             else -> x.coerceIn(m, w - m)
         }
         val firstW = (eff - hp / 2f).roundToInt().coerceIn(0, w - hp)
