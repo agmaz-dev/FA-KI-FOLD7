@@ -99,7 +99,7 @@ private val GITHUB_STRONG = Regex("github|\\brepo(s|sitor(y|ys|ies|ium|ien))?\\b
 
 /** GitHub tasks (go to the local model with GitHub tools when a token is set). */
 private val GITHUB_WORDS = Regex(
-    "github|\\brepo(s|sitor(y|ys|ies|ium|ien))?\\b|pull ?request|\\bcommit|\\bbranch|workflow|\\bapk\\b|programmier|quellcode|\\bcode\\b|" +
+    "git ?hub|gitup|git-hub|\\bre+p+o+s?\\b|\\bre+posts?\\b|\\bripos?\\b|\\brepo(s|sitor(y|ys|ies|ium|ien))?\\b|pull ?request|\\bcommit|\\bbranch|workflow|\\bapk\\b|programmier|quellcode|\\bcode\\b|" +
         "\\bbuild\\b|bauen? (die|eine|mir eine) app|app bauen|kotlin|gradle",
     RegexOption.IGNORE_CASE,
 )
@@ -122,6 +122,27 @@ private val JUST_READ = Regex("(was steht|zusammenfass|fass .* zusammen|erklär|
 
 /** Short requests like "als PDF bitte": the app makes the PDF itself from the last answer (the model cannot). */
 private val PDF_WORD = Regex("\\bpdf\\b", RegexOption.IGNORE_CASE)
+/** Short follow-ups that ask for a file of the last letter/document ("so erstelle", "mach daraus eine Datei", "zum Drucken"). */
+private val PDF_FOLLOW = Regex(
+    "^(so|ok|ja|gut)?,? ?(erstell|mach|generier|exportier|speicher|druck)\\w*( (es|das|ihn|sie|daraus|davon|mir|bitte|jetzt|fertig|eine datei|ein dokument|als datei))*[ .!]*$|" +
+        "als (datei|dokument|ausdruck)|zum (drucken|ausdrucken|speichern)|ausdrucken|druckfertig",
+    RegexOption.IGNORE_CASE,
+)
+/** The model claims it made a PDF/file (it cannot – only the app can). */
+private val PDF_CLAIM = Regex("(pdf|datei|dokument)[^.\\n]{0,50}(erstellt|generiert|angehängt|gespeichert|exportiert|bereit|fertig)|(erstellt|generiert|exportiert)[^.\\n]{0,30}\\bpdf\\b", RegexOption.IGNORE_CASE)
+/** Greetings and thanks: never searched in the internet. */
+private val SMALL_TALK = Regex("^(hallo|hi|hey|moin|servus|danke|vielen dank|guten (morgen|tag|abend)|gute nacht|tschüss|ok|okay|super|cool|alles klar)\\b", RegexOption.IGNORE_CASE)
+/** Follow-ups that need the earlier question for a web search ("ist an", "guck mal dort", "und der Preis?"). */
+private val REFERS_BACK = Regex("\\b(dort|da|das|dazu|davon|darüber|ist an|nochmal|weiter|und der|und die|und das|wie viel|was kostet)\\b", RegexOption.IGNORE_CASE)
+/** Filler words removed from a web query. */
+private val FILLER = Regex("\\b(bitte|kannst du|könntest du|kann man|mal|mir|uns|such(e|en)?|im internet|online|im netz|google|googel|schau|guck|nach|nachsehen|nachschauen|für mich|ich möchte|ich will|wissen)\\b", RegexOption.IGNORE_CASE)
+/** Placeholders in a letter for the user's own data. */
+private val NAME_PH = Regex("\\[\\s*(ihr|dein|mein|ihre|deine)?\\s*(vor- und nach|voll|vollständiger )?name\\s*\\]", RegexOption.IGNORE_CASE)
+private val STREET_PH = Regex("\\[\\s*(ihre|deine|meine)?\\s*(adresse|anschrift|straße( und hausnummer)?|strasse( und hausnummer)?)\\s*\\]", RegexOption.IGNORE_CASE)
+private val ZIP_PH = Regex("\\[\\s*(plz( und ort| ort|, ort)?|postleitzahl( und ort)?)\\s*\\]", RegexOption.IGNORE_CASE)
+private val CITY_PH = Regex("\\[\\s*(ort|stadt|wohnort)\\s*\\]", RegexOption.IGNORE_CASE)
+private val PHONE_PH = Regex("\\[\\s*(ihre |deine )?(telefon(nummer)?|tel\\.?)\\s*\\]", RegexOption.IGNORE_CASE)
+private val MAIL_PH = Regex("\\[\\s*(ihre |deine )?(e-?mail(-adresse)?)\\s*\\]", RegexOption.IGNORE_CASE)
 private val INFO_QUESTION = Regex("^(was|wie|warum|wieso|weshalb|welche[rs]?|wo|wann)\\b", RegexOption.IGNORE_CASE)
 /** Placeholder the model sometimes leaves instead of a date. */
 private val DATE_PLACEHOLDER = Regex("\\[\\s*(aktuelles |heutiges )?datum( einfügen| eintragen)?\\s*\\]", RegexOption.IGNORE_CASE)
@@ -167,7 +188,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var idleJob: Job? = null
     val attachments = Attachments(app)
     val voice = de.foldki.app.voice.VoiceController(app).apply {
-        rate = settings.ttsRate; supertonicVoice = settings.stVoice
+        rate = settings.ttsRate; supertonicVoice = settings.stVoice; phononVoice = settings.phononVoice; useLive = settings.liveDictation
     }
 
     // One-time setup of the voice function: Tessa & Caleb (Supertonic) + speech recognition (Whisper).
@@ -196,6 +217,59 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun cancelVoiceSetup() { stJob?.cancel() }
+
+    /** Ab 4.9: Phonon (Anton) once from Hugging Face – the model is gated, so the user's Hugging Face token is needed. */
+    private val _phStatus = MutableStateFlow(if (voice.phonon.isReady) "Bereit" else if (!de.foldki.app.voice.Phonon.libAvailable) "fehlt in dieser APK" else "Noch nicht eingerichtet")
+    val phStatus: StateFlow<String> = _phStatus.asStateFlow()
+    private val _phBusy = MutableStateFlow(false)
+    val phBusy: StateFlow<Boolean> = _phBusy.asStateFlow()
+    private var phJob: Job? = null
+
+    fun setupPhonon(token: String) {
+        if (_phBusy.value) return
+        settings.hfToken = token
+        _phBusy.value = true
+        phJob = viewModelScope.launch {
+            try {
+                voice.phonon.prepare(token.trim()) { line -> _phStatus.value = line }
+                _phStatus.value = "Bereit"
+                voice.previewPhonon(settings.phononVoice) { notify("Phonon: $it") }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                _phStatus.value = "Abgebrochen"
+            } catch (e: Throwable) {
+                _phStatus.value = e.message ?: e.javaClass.simpleName
+            } finally { _phBusy.value = false }
+        }
+    }
+
+    fun cancelPhonon() { phJob?.cancel() }
+
+    fun removePhonon() { voice.phonon.remove(); _phStatus.value = "Noch nicht eingerichtet" }
+
+    fun setPhononVoice(key: String) { settings.phononVoice = key; voice.phononVoice = key }
+
+    fun setLiveDictation(on: Boolean) { settings.liveDictation = on; voice.useLive = on; if (on) voice.recheckLive() }
+
+    /** Live dictation: lets Android download the German recognition model (once). */
+    fun downloadLive() {
+        viewModelScope.launch {
+            val ok = voice.live.download { line -> notify(line) }
+            voice.recheckLive()
+            notify(if (ok) "Live-Diktat ist bereit" else "Live-Diktat nicht möglich – Whisper wird benutzt")
+        }
+    }
+
+    /** Whisper only (fallback for dictation where live dictation does not work). */
+    fun setupWhisper() {
+        if (_stBusy.value) return
+        _stBusy.value = true
+        stJob = viewModelScope.launch {
+            try { voice.whisper.prepare { line -> _stStatus.value = line }; _stStatus.value = READY }
+            catch (e: kotlinx.coroutines.CancellationException) { _stStatus.value = "Abgebrochen." }
+            catch (e: Throwable) { _stStatus.value = "Fehler: ${e.message ?: e.javaClass.simpleName}" }
+            finally { _stBusy.value = false }
+        }
+    }
 
     fun saveVoice(stVoice: String, rate: Float) {
         settings.stVoice = stVoice; settings.ttsRate = rate
@@ -279,19 +353,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun thermal(): Int = if (android.os.Build.VERSION.SDK_INT >= 29) runCatching { power.currentThermalStatus }.getOrDefault(0) else 0
-    private fun tooHot(): Boolean = thermal() >= android.os.PowerManager.THERMAL_STATUS_SEVERE
+    /** Ab 4.9: a pause only from "critical" on – "severe" right after an answer is normal and only logged. */
+    private fun tooHot(): Boolean = thermal() >= android.os.PowerManager.THERMAL_STATUS_CRITICAL
 
     /**
-     * Phone hot: wait up to 60 s for it to cool down instead of refusing at once (right after an answer the status is
-     * often "severe" for a few seconds). Only "critical" or worse still stops the answer.
+     * Phone hot ("critical"): wait up to 90 s for it to cool down instead of refusing at once. Only "emergency" or worse
+     * still stops the answer. "Severe" is only written to the error report.
      */
     private suspend fun coolDown(onHot: (String) -> Unit) {
+        val t = thermal()
+        if (t == android.os.PowerManager.THERMAL_STATUS_SEVERE) de.foldki.app.data.DebugLog.write("Handy warm (Status $t) – keine Pause")
         if (!tooHot()) return
-        de.foldki.app.data.DebugLog.write("Handy warm (Status ${thermal()}) – warte bis zu 60 s")
-        onHot("Das Handy ist warm – kurz abkühlen lassen …")
+        de.foldki.app.data.DebugLog.write("Handy heiß (Status $t) – warte bis zu 90 s")
+        onHot("Das Handy ist heiß – kurz abkühlen lassen …")
         var waited = 0
-        while (tooHot() && waited < 60) { delay(2000); waited += 2 }
-        if (thermal() >= android.os.PowerManager.THERMAL_STATUS_CRITICAL)
+        while (tooHot() && waited < 90) { delay(3000); waited += 3 }
+        if (thermal() >= android.os.PowerManager.THERMAL_STATUS_EMERGENCY)
             throw IllegalStateException("Das Handy ist zu heiß. Bitte ein paar Minuten abkühlen lassen und nochmal fragen.")
         de.foldki.app.data.DebugLog.write("Weiter nach $waited s (Status ${thermal()})")
         onHot("")
@@ -328,6 +405,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setLetters(on: Boolean) { settings.letters = on; _ui.update { it.copy(letters = on) } }
 
+    /** Ab 4.9: settings of one model (null = recommended values). The model loads again with the next question. */
+    fun saveModelParams(file: String, p: de.foldki.app.data.ModelParams?) {
+        settings.setModelParams(file, p)
+        if (loadedPathAny() == models.fileOf(file).absolutePath) { if (llmGenerating) stop(); freeModels(); _ui.update { it.copy(backend = "") } }
+        notify("Einstellungen für ${models.nameOf(file)} gespeichert")
+    }
+
+    /** NPU power (Sparsam / Ausgewogen / Maximal); applies from the next app start (llama.cpp reads it once). */
+    fun setNpuPower(mode: String) { settings.npuPower = mode; notify("NPU-Leistung gilt ab dem nächsten Start der App") }
+
     // ---- Long-term memory (on-device only; not sent to the model while all built-in instructions are off) ----
     val memory = de.foldki.app.data.MemoryStore(app)
     private val _memories = MutableStateFlow(memory.all())
@@ -336,14 +423,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun removeMemory(index: Int) { memory.remove(index); _memories.value = memory.all() }
 
     /** App in the background or memory is low: free the model's memory (it loads again on the next question). */
+    private var bgJob: Job? = null
+
     fun onBackground() {
-        if (!llmGenerating) { freeModels(); _ui.update { it.copy(backend = "") } }
+        // Ab 4.9: the model stays loaded for 2 minutes in the background (e.g. to copy something and come back),
+        // then its memory is freed. Low memory frees it at once (onLowMemory).
+        bgJob?.cancel()
+        bgJob = viewModelScope.launch { delay(120_000); if (!llmGenerating) { freeModels(); _ui.update { it.copy(backend = "") } } }
         // "Automatisch sichern": when the app goes to the background, at most every 30 minutes.
         if (settings.s3Auto && System.currentTimeMillis() - settings.s3Last > 30 * 60_000L) s3BackupNow(quiet = true)
     }
 
     /** Android is short of memory (app in the background): also free the speech recognition model. */
-    fun onLowMemory() { voice.trimMemory() }
+    fun onLowMemory() { voice.trimMemory(); if (!llmGenerating) { freeModels(); _ui.update { it.copy(backend = "") } } }
 
     private fun llmBegin() { if (llmBusy.incrementAndGet() == 1) { settings.llmAttempt = settings.activeModel; settings.llmLoading = true } }
     private fun llmEnd() { if (llmBusy.decrementAndGet() <= 0) { llmBusy.set(0); settings.llmLoading = false } }
@@ -377,6 +469,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             (if (!isGguf && settings.gemmaBackend == "GPU" && !HfModels.isGpuFile(file) && !file.lowercase().startsWith("gemma")) " Tipp: Diese Datei ist nicht für den Grafikprozessor gebaut. " +
                 "Lade unter Erkunden die Variante mit „gpu“ im Dateinamen." else "")
         voice.trimMemory() // speech model out of memory before a big load
+        // Ab 4.9: warn before a load that leaves too little memory (Android then ends the app).
+        val needMb = f.length() / 1_000_000 * (if (isGguf) 11 else 12) / 10
+        val freeMb = freeRamMb()
+        if (freeMb in 1 until needMb + 1500) {
+            de.foldki.app.data.DebugLog.write("Speicher knapp vor dem Laden: frei $freeMb MB, Modell braucht ca. $needMb MB")
+            notify("Speicher knapp: frei ${"%.1f".format(java.util.Locale.GERMANY, freeMb / 1000.0)} GB, das Modell braucht ca. " +
+                "${"%.1f".format(java.util.Locale.GERMANY, needMb / 1000.0)} GB. Andere Apps schließen, sonst beendet Android die App.")
+        }
+        // NPU power (Hexagon): read by llama.cpp when the NPU part starts (once per app start).
+        if (isGguf) runCatching { android.system.Os.setenv("GGML_HEXAGON_POWER_MODE", settings.npuPower, true) }
         de.foldki.app.data.DebugLog.write("LADE $file · " + (if (isGguf) "GGUF · GPU-Anteil ${settings.gpuPercent} %" else
             "${settings.gemmaBackend} · ${if (HfModels.isGpuFile(file)) "GPU-Datei" else "keine GPU-Datei (GPU ohne Cache)"}") + " · " +
             "${LocalModelManager.gb(f.length())} · frei RAM ${freeRamMb()} MB")
@@ -384,7 +486,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // Only one engine holds a model: free the other one first.
         if (isGguf) llm.close() else gguf.close()
         val d = if (isGguf) gguf.loadAsync(f.absolutePath, ggufPct)
-            else llm.loadAsync(f.absolutePath, settings.gemmaBackend == "GPU")
+            else llm.loadAsync(f.absolutePath, settings.gemmaBackend == "GPU", context = settings.modelParams(file).context)
         llmBegin(); d.invokeOnCompletion { llmEnd() } // stays guarded until the native load really ends
         return try {
             val b = withTimeoutOrNull(600_000) { d.await() } ?: return "Das Modell lädt zu lange (über 10 Minuten). Bitte nochmal fragen."
@@ -455,6 +557,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Called when the app comes to the foreground (from the launcher or another app). */
     fun onAppResumed() {
+        bgJob?.cancel(); bgJob = null
         voice.prewarm() // speech input: model ready before the first tap
         if (!settings.dailyBriefEnabled || briefJob?.isActive == true) return
         val current = _brief.value
@@ -684,10 +787,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private fun isGitHubTask(prompt: String, history: List<ChatMessage>): Boolean {
         if (settings.githubToken.isBlank()) return false
         if (GITHUB_WORDS.containsMatchIn(prompt)) return true
-        // follow-ups ("ja, mach weiter") in a chat that already worked on GitHub
-        return history.takeLast(4).any { m ->
-            m.role == Role.ASSISTANT && listOf("✅ Freigegeben", "⛔ Abgelehnt", "🔎 Suche:", "📄 Lese ", "📁 ", "⚙️ Build-Status").any { m.text.contains(it) }
-        }
+        // follow-ups ("ja, mach weiter", "ist verbunden") in a chat that already worked on GitHub
+        if (history.takeLast(6).any { m ->
+            m.role == Role.ASSISTANT && listOf("✅ Freigegeben", "⛔ Abgelehnt", "🔎 Suche:", "📄 Lese ", "📁 ", "⚙️ Build-Status", "GitHub").any { m.text.contains(it) }
+        }) return true
+        // Ab 4.9: a short follow-up right after a GitHub question stays with GitHub (also dictated ones with recognition errors).
+        val earlierUser = history.dropLast(1).filter { it.role == Role.USER }.takeLast(2)
+        return prompt.length <= 80 && earlierUser.any { GITHUB_WORDS.containsMatchIn(it.text) }
     }
 
     fun saveSettings(apiKey: String, model: String, system: String) {
@@ -827,22 +933,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val prompt = text.trim().ifEmpty { if (pendingFiles.isNotEmpty()) "Was steht in diesem Dokument? Fasse es kurz zusammen." else "" }
         if (prompt.isEmpty() || _ui.value.generating || _ui.value.importing) return
         // "als PDF bitte": the app makes the PDF from the last answer itself (no model needed).
-        if (pendingFiles.isEmpty() && prompt.length <= 60 && PDF_WORD.containsMatchIn(prompt) && !INFO_QUESTION.containsMatchIn(prompt)) {
+        if (pendingFiles.isEmpty() && prompt.length <= 80 && !INFO_QUESTION.containsMatchIn(prompt)) {
             val lastAnswer = _ui.value.current?.messages?.lastOrNull { it.role == Role.ASSISTANT && !it.isError && it.text.isNotBlank() && !it.text.startsWith(PDF_REPLY) }
-            if (lastAnswer != null) { pdfFromChat(prompt, lastAnswer); return }
+            // "als PDF" always; "so erstelle", "mach daraus eine Datei", "zum Drucken" only after a letter/document.
+            val isDoc = lastAnswer != null && (DocumentParser.parse(lastAnswer.text).document != null || LETTER_WORDS.containsMatchIn(lastAnswer.text.take(300)))
+            if (lastAnswer != null && (PDF_WORD.containsMatchIn(prompt) || (isDoc && PDF_FOLLOW.containsMatchIn(prompt.trim())))) { pdfFromChat(prompt, lastAnswer); return }
         }
         // „Länge“: letters and documents are always written in full; else the model is told the length and ends the sentence.
         val docTask = LETTER_WORDS.containsMatchIn(prompt) || DOC_WORDS.containsMatchIn(prompt)
         val answerLimit = if (noLimit || docTask) 0 else settings.answerLength.tokens
         val lengthHint = when {
+            voice && !docTask -> "Das ist ein Gespräch mit Sprache: antworte kurz in 1 bis 3 Sätzen, wie gesprochen, ohne Listen, Tabellen oder Markdown."
             answerLimit in 1..500 -> "Antworte kurz: höchstens etwa 200 Wörter. Beende immer den letzten Satz."
             answerLimit in 501..2000 -> "Antworte in höchstens etwa 800 Wörtern. Beende immer den letzten Satz."
             else -> ""
         }
         // What the engine may write at most (thinking included): room to end the sentence after the limit.
-        val engineMax = if (answerLimit == 0) 0 else (answerLimit * 3 / 2 + de.foldki.app.ai.GgufEngine.THINK_BUDGET).coerceAtMost(de.foldki.app.ai.GgufEngine.MAX_ANSWER_TOKENS)
-        val web = _ui.value.webSearch
         val act = settings.activeModel
+        // Ab 4.9: settings per model (Modelle → Einstellungen); letters and documents are written more calmly.
+        val params0 = if (act.isBlank() || act == Settings.NANO || act.startsWith(de.foldki.app.ai.PcServer.PREFIX)) de.foldki.app.data.ModelParams() else settings.modelParams(act)
+        // Anruf-Modus: no thinking – the answer should start at once.
+        val params = if (voice && !docTask) params0.copy(think = "off") else params0
+        val baseTemp: Double? = if (params.temperature >= 0f) params.temperature.toDouble() else settings.creativity.temperature
+        val temp: Double? = if (docTask) minOf(baseTemp ?: 0.3, 0.3) else baseTemp
+        val engineMax = when {
+            answerLimit > 0 -> (answerLimit * 3 / 2 + de.foldki.app.ai.GgufEngine.THINK_BUDGET).coerceAtMost(de.foldki.app.ai.GgufEngine.MAX_ANSWER_TOKENS)
+            params.maxTokens > 0 && !docTask -> params.maxTokens
+            else -> 0
+        }
+        val ghLikely = settings.githubEnabled && settings.githubToken.isNotBlank() && GITHUB_WORDS.containsMatchIn(prompt)
+        // Ab 4.9: no internet search for greetings, letters, documents, attached files, GitHub/tool tasks or empty follow-ups.
+        val web = _ui.value.webSearch && wantsWeb(prompt, docTask, pendingFiles.isNotEmpty(), ghLikely)
         val useNano = act == Settings.NANO
         val modelName = _ui.value.activeName
         val engine = if (useNano) Engine.NANO else Engine.GEMMA
@@ -881,7 +1002,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 if (letters) analyzeDocs(conv.id, history.flatMap { it.attachments })
                 val history = _ui.value.conversations.firstOrNull { it.id == conv.id }?.messages?.dropLast(1) ?: history
-                val system = systemWithContext(conv.instruction, lengthHint)
+                val calcHint = de.foldki.app.ai.Calc.hint(prompt)
+                val system = (if (useNano) nanoSystem(conv.instruction, lengthHint) else systemWithContext(conv.instruction, lengthHint)) +
+                    (if (calcHint.isBlank()) "" else "\n\n" + calcHint)
                 logSystem = system
                 logHistory = history.size
                 val onHot: (String) -> Unit = { t -> editMessage(conv.id, botMsg.id) { it.copy(text = t) } }
@@ -943,6 +1066,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 var answerPieces = 0
                 var stopNow = false
                 var cutNow = false
+                var looped = false
                 val onPiece: (String) -> Unit = { d ->
                     if (tFirst == 0L) tFirst = System.currentTimeMillis()
                     pieces++
@@ -954,67 +1078,79 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         if (answerPieces >= answerLimit && endsSentence(sp.answer)) stopNow = true
                         else if (answerPieces >= answerLimit * 3 / 2) { stopNow = true; cutNow = true }
                     }
+                    // Ab 4.9: loop guard – a model that writes the same block again and again is stopped.
+                    if (!stopNow && answerPieces > 0 && answerPieces % 30 == 0 && repeats(sp.answer)) { stopNow = true; looped = true }
                     if (tAnswer == 0L && sp.answer.isNotBlank() && sp.thoughts.isNotEmpty()) tAnswer = System.currentTimeMillis()
                     if (sp.thinking != _ui.value.thinking) _ui.update { it.copy(thinking = sp.thinking) }
                     editMessage(conv.id, botMsg.id) { it.copy(text = sp.answer, thoughts = sp.thoughts) }
                 }
                 val server = _ui.value.activeServer
                 if (server != null) {
-                    val webText = if (web) webFor(prompt).take(4000) else ""
+                    val webText = if (web) webFor(prompt, history).take(4000) else ""
                     val turns = history.filter { !it.isError && it.text.isNotBlank() }
                     val last = turns.lastOrNull { it.role == Role.USER }
                     if (last != null) {
                         val earlier = turns.subList(0, turns.lastIndexOf(last)).takeLast(20).map { turnOf(it, 6000) }.map { it.user to it.text }
                         val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + turnOf(last, 20000).text
                         de.foldki.app.data.DebugLog.write("START PC-Server ${server.typeLabel} ${server.base} · ${server.model} · Frage ${question.length}")
-                        ServerEngine.chat(server, system, earlier, question, settings.creativity.temperature, engineMax).takeWhile { !stopNow }.collect { onPiece(it) }
+                        ServerEngine.chat(server, system, earlier, question, temp, engineMax).takeWhile { !stopNow }.collect { onPiece(it) }
                     }
                 } else if (useNano) {
                     if (!_ui.value.nanoReady) checkNano().join()
                     if (!_ui.value.nanoReady) throw IllegalStateException("Gemini Nano ist nicht bereit: ${_ui.value.nanoStatus}")
-                    nano.reply(system, history, web).let { f -> if (engineMax > 0) f.take(engineMax) else f }.takeWhile { !stopNow }.collect { onPiece(it) }
+                    nano.reply(system, history, if (web) webFor(prompt, history) else "").let { f -> if (engineMax > 0) f.take(engineMax) else f }.takeWhile { !stopNow }.collect { onPiece(it) }
                 } else if (HfModels.isGguf(act)) withLocal(onHot) {
                     val budget = gguf.inputBudgetChars - system.length
-                    val webText = if (web) webFor(prompt).take(budget / 4) else ""
+                    val webText = if (web) webFor(prompt, history).take(budget / 4) else ""
                     val turns = history.filter { !it.isError && it.text.isNotBlank() }
                     val last = turns.lastOrNull { it.role == Role.USER } ?: return@withLocal
-                    val earlier = turns.subList(0, turns.lastIndexOf(last)).takeLast(10).map { turnOf(it, budget / 3) }
+                    val earlier = compress(turns.subList(0, turns.lastIndexOf(last)).takeLast(10).map { turnOf(it, budget / 3) }, budget)
                         .map { (it.user) to it.text }
                     val room = (budget * 0.8).toInt() - webText.length - last.text.length
                     val own = turnOf(last, room.coerceAtLeast(0))
                     val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + own.text
                     de.foldki.app.data.DebugLog.write("START GGUF ${models.nameOf(act)} · ${gguf.backendUsed} · Kontext ${gguf.contextTokens} · Frage ${question.length}")
                     var first = true
-                    gguf.chat(system, earlier, question, settings.creativity.temperature, engineMax).takeWhile { !stopNow }.collect {
+                    gguf.chat(system, earlier, question, temp, engineMax, params.topK, params.topP, params.think).takeWhile { !stopNow }.collect {
                         if (first) { first = false; ggufThink = gguf.thinkOpen }
                         onPiece(it)
                     }
                 } else withLocal(onHot) {
                     // Everything must fit into the model's context – too much input closes the whole app natively.
                     val budget = llm.inputBudgetChars - system.length
-                    val webText = if (web) webFor(prompt).take(budget / 4) else ""
+                    val webText = if (web) webFor(prompt, history).take(budget / 4) else ""
                     val turns = history.filter { !it.isError && it.text.isNotBlank() }
                     val last = turns.lastOrNull { it.role == Role.USER } ?: return@withLocal
-                    val earlier = turns.subList(0, turns.lastIndexOf(last)).map { turnOf(it, budget / 3) }
+                    val earlier = compress(turns.subList(0, turns.lastIndexOf(last)).map { turnOf(it, budget / 3) }, budget)
                     val room = (budget * 0.8).toInt() - webText.length - last.text.length
                     val own = turnOf(last, room.coerceAtLeast(0))
                     if (last.attachments.any { it.text.length > room.coerceAtLeast(0) })
                         notify("Die Datei ist zu lang für dieses Modell – es liest nur den Anfang (ca. ${room.coerceAtLeast(0)} Zeichen).")
-                    val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + own.text
+                    // Qwen thinking off (soft switch of the Qwen chat template).
+                    val noThink = if (params.think == "off" && act.lowercase().contains("qwen")) " /no_think" else ""
+                    val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + own.text + noThink
                     // For the error report: what goes to the model (a native crash is only seen at the next start).
                     de.foldki.app.data.DebugLog.write(
                         "START ${models.nameOf(act)} · ${llm.backendUsed} · Kontext ${llm.contextTokens} Tokens · " +
                             "Platz ${llm.inputBudgetChars} Zeichen · Anweisung ${system.length} · Frage ${question.length} · " +
                             "Verlauf ${earlier.size} Nachrichten (${earlier.sumOf { it.text.length }} Zeichen)",
                     )
-                    llm.chat(conv.id, system, earlier, question, last.id, botMsg.id, settings.creativity.temperature)
+                    llm.chat(conv.id, system, earlier, question, last.id, botMsg.id, temp, params.topK, params.topP)
                         .let { f -> if (engineMax > 0) f.take(engineMax) else f }.takeWhile { !stopNow }.collect { onPiece(it) }
                 }
                 val end = ThinkParser.split(raw.toString(), thinkOpenName || ggufThink, finished = true)
                 val now = System.currentTimeMillis()
+                // Ab 4.9: the app checks the answer – sums recomputed, own data instead of placeholders, loops cut, sources.
+                var finalText = end.answer
+                if (looped) finalText = cutRepeats(finalText) + "\n\n(Wiederholung erkannt – angehalten.)"
+                if (!finalText.contains("```")) finalText = de.foldki.app.ai.Calc.fixEquations(finalText)
+                finalText = fillPlaceholders(finalText)
+                if (web && lastSources.isNotEmpty() && finalText.isNotBlank())
+                    finalText += "\n\nQuellen:\n" + lastSources.take(5).joinToString("\n") { (t, u) -> "• $t – $u" }
+                val claimsPdf = settings.pdfEnabled && PDF_CLAIM.containsMatchIn(finalText)
                 editMessage(conv.id, botMsg.id) {
                     it.copy(
-                        text = end.answer, thoughts = end.thoughts,
+                        text = finalText, thoughts = end.thoughts, firstMs = if (tFirst > 0) tFirst - t0 else 0,
                         tokens = if (useNano) 0 else pieces, answerMs = now - t0,
                         tokPerSec = if (!useNano && pieces > 1 && now > tFirst) (pieces - 1) * 1000f / (now - tFirst) else 0f,
                         backend = if (useNano) "AICore" else if (_ui.value.activeServer != null) "PC" else if (HfModels.isGguf(act)) (gguf.backendUsed ?: "") else (llm.backendUsed ?: ""),
@@ -1022,6 +1158,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         thinkMs = if (end.thoughts.isNotEmpty() && tFirst > 0) ((if (tAnswer > 0) tAnswer else now) - tFirst).coerceAtLeast(0) else 0,
                         cut = cutNow || (answerLimit > 0 && answerPieces >= answerLimit && !endsSentence(end.answer)),
                     )
+                }
+                // The header shows the engine that just answered (not "nicht geladen").
+                if (!useNano && server == null) (if (HfModels.isGguf(act)) gguf.backendUsed else llm.backendUsed)?.let { b -> _ui.update { it.copy(backend = b) } }
+                // The model claims it made a PDF – only the app can: it makes it now from the letter in the chat.
+                if (claimsPdf && !voice) {
+                    val doc = DocumentParser.parse(finalText).document
+                        ?: _ui.value.conversations.firstOrNull { it.id == conv.id }?.messages?.lastOrNull { m ->
+                            m.role == Role.ASSISTANT && !m.isError && DocumentParser.parse(m.text).document != null
+                        }?.let { DocumentParser.parse(it.text).document }
+                    if (doc != null) {
+                        editMessage(conv.id, botMsg.id) { it.copy(text = it.text + "\n\n$PDF_REPLY – dort speichern, teilen oder den Text ändern.") }
+                        openPreview(doc)
+                    }
                 }
                 finished = true
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1049,7 +1198,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 // No PDF from a half-written letter (stopped or failed); only with the switch "Briefe".
                 if (finished && letters) attachDocumentPdf(conv.id, botMsg.id, wantsLetter, openPreview = !voice)
                 // "Antworten automatisch vorlesen" (page Stimmen); in voice mode the overlay speaks itself.
-                if (finished && !voice && settings.autoSpeak && this@ChatViewModel.voice.supertonic.isReady) {
+                if (finished && !voice && settings.autoSpeak && this@ChatViewModel.voice.canSpeak) {
                     answer?.text?.takeIf { it.isNotBlank() }?.let { this@ChatViewModel.voice.speak(DocumentParser.spoken(it)) }
                 }
                 // Only the still-current job may end "generating" (a stopped job must not end the next one).
@@ -1073,10 +1222,89 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         return LocalEngine.Turn(m.id, true, files.toString() + m.text)
     }
 
-    /** Web results for the local model (search terms by the model itself, then Wikipedia + news). */
-    private suspend fun webFor(question: String): String {
-        // No prompt for search terms (from 3.3): the question itself is searched.
-        return WebLookup.search(question.take(100))
+    /** Sources (title, link) of the last internet search; listed under the answer. */
+    private var lastSources: List<Pair<String, String>> = emptyList()
+
+    /** Ab 4.9: is an internet search useful for this question? */
+    private fun wantsWeb(prompt: String, docTask: Boolean, hasFiles: Boolean, toolTask: Boolean): Boolean {
+        val p = prompt.trim()
+        return when {
+            p.length < 4 || docTask || hasFiles || toolTask -> false
+            SMALL_TALK.containsMatchIn(p) && p.length < 40 -> false
+            PDF_WORD.containsMatchIn(p) || PDF_FOLLOW.containsMatchIn(p) -> false
+            else -> true
+        }
+    }
+
+    /** Search words from the question: filler removed; a short follow-up is combined with the earlier question. */
+    private fun webQuery(prompt: String, history: List<ChatMessage>): String {
+        val earlier = history.dropLast(1).lastOrNull { it.role == Role.USER }?.text.orEmpty()
+        val base = if ((prompt.length < 30 || REFERS_BACK.containsMatchIn(prompt)) && earlier.isNotBlank()) "$earlier $prompt" else prompt
+        val q = base.replace(FILLER, " ").replace(Regex("[?!.,;:\"„“]"), " ").replace(Regex("\\s+"), " ").trim()
+        return q.ifBlank { prompt }.take(100)
+    }
+
+    /** Web results for the model (Wikipedia, news, web search) – searched with words from the question and the chat. */
+    private suspend fun webFor(question: String, history: List<ChatMessage> = emptyList()): String {
+        val q = webQuery(question, history)
+        de.foldki.app.data.DebugLog.write("Websuche: „$q“")
+        val r = WebLookup.searchWithSources(q)
+        lastSources = r.second
+        return r.first
+    }
+
+    /** Ab 4.9: older turns are shortened when the chat fills more than 75 % of the model's room. */
+    private fun compress(turns: List<LocalEngine.Turn>, budget: Int): List<LocalEngine.Turn> {
+        if (turns.sumOf { it.text.length } <= budget * 3 / 4 || turns.size <= 4) return turns
+        val keep = turns.size - 4
+        return turns.mapIndexed { i, t -> if (i < keep && t.text.length > 400) t.copy(text = t.text.take(400) + " …") else t }
+    }
+
+    /** true = the end of [text] is the same block written three times in a row (a loop). */
+    private fun repeats(text: String): Boolean {
+        val t = text.trimEnd()
+        if (t.length < 90) return false
+        for (len in 20..minOf(400, t.length / 3)) {
+            val a = t.substring(t.length - len)
+            if (t.endsWith(a + a + a)) return true
+        }
+        // the same line again and again
+        val lines = t.lines().map { it.trim() }.filter { it.length > 15 }
+        return lines.size >= 4 && lines.takeLast(4).distinct().size == 1
+    }
+
+    /** Removes the repeated blocks at the end, keeps one. */
+    private fun cutRepeats(text: String): String {
+        var t = text.trimEnd()
+        for (len in 20..minOf(400, t.length / 2)) {
+            val a = t.substring(t.length - len)
+            while (t.length >= 2 * len && t.endsWith(a + a)) t = t.substring(0, t.length - len)
+        }
+        val lines = t.lines()
+        val out = ArrayList<String>()
+        for (l in lines) if (out.isEmpty() || l.trim().length <= 15 || l.trim() != out.last().trim()) out += l
+        return out.joinToString("\n").trimEnd()
+    }
+
+    /** Ab 4.9: placeholders for the user's own data ("[Ihr Name]") get the data of the active sender profile. */
+    private fun fillPlaceholders(text: String): String {
+        if (!text.contains('[')) return text
+        val p = settings.activeSender ?: return text.replace(DATE_PLACEHOLDER, today())
+        var t = text.replace(DATE_PLACEHOLDER, today())
+        if (p.name.isNotBlank()) t = t.replace(NAME_PH) { p.name }
+        if (p.street.isNotBlank()) t = t.replace(STREET_PH) { p.street }
+        if (p.zipCity.isNotBlank()) t = t.replace(ZIP_PH) { p.zipCity }
+        if (p.city.isNotBlank()) t = t.replace(CITY_PH) { p.city }
+        if (p.phone.isNotBlank()) t = t.replace(PHONE_PH) { p.phone }
+        if (p.email.isNotBlank()) t = t.replace(MAIL_PH) { p.email }
+        return t
+    }
+
+    /** Gemini Nano: only date, language and the own instruction (its input is small; long texts made it repeat itself). */
+    private fun nanoSystem(instructionId: String, lengthHint: String): String {
+        val day = java.text.SimpleDateFormat("EEEE, d. MMMM yyyy", java.util.Locale.GERMANY).format(java.util.Date())
+        val ctx = if (settings.appContext) "Heute ist $day. Antworte auf Deutsch." else ""
+        return listOf(ctx, lengthHint, systemFor(instructionId)).filter { it.isNotBlank() }.joinToString("\n")
     }
 
     /** true = the text ends a sentence (or a line), so stopping here does not cut a word or sentence. */
@@ -1258,7 +1486,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             append("Heute ist ").append(day).append(".\n")
             append("Antworte auf Deutsch, außer der Nutzer möchte eine andere Sprache.\n")
             append("Du bist die KI der App „Fold KI“ auf dem Handy des Nutzers. Die App kann:")
-            if (settings.pdfEnabled) append("\n- aus Briefen und Schreiben eine PDF machen (der Nutzer schreibt „als PDF“ oder tippt auf die PDF-Karte). Schreib Briefe vollständig, mit dem heutigen Datum statt Platzhaltern.")
+            if (settings.pdfEnabled) append("\n- aus Briefen und Schreiben eine PDF machen (der Nutzer schreibt „als PDF“ oder tippt auf die PDF-Karte). Schreib Briefe vollständig, mit dem heutigen Datum statt Platzhaltern. Behaupte nie, du hättest selbst eine PDF erstellt – das macht die App.")
+            settings.activeSender?.takeIf { it.name.isNotBlank() }?.let { sp ->
+                append("\n- Absender des Nutzers für Briefe: ").append(listOf(sp.name, sp.street, sp.zipCity).filter { it.isNotBlank() }.joinToString(", "))
+                    .append(". Setze diese Angaben ein, keine Platzhalter wie [Ihr Name].")
+            }
+            append("\n- genau rechnen: Rechnungen rechnet die App nach.")
             append("\n- im Internet suchen, wenn der Schalter „Websuche“ an ist (gerade ").append(if (settings.webSearch) "an" else "aus").append(").")
             if (settings.githubEnabled && settings.githubToken.isNotBlank()) append("\n- auf GitHub arbeiten (Repos lesen, Code ändern, Builds prüfen), wenn der Nutzer GitHub, ein Repo oder Code erwähnt.")
             if (mcpReady()) append("\n- Werkzeuge vom eigenen Server „").append(settings.mcpName.ifBlank { "MCP" }).append("“ benutzen, wenn der Nutzer Werkzeuge oder den Server erwähnt.")
