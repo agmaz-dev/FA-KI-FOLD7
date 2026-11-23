@@ -23,8 +23,8 @@ android {
         applicationId = "de.foldki.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 53
-        versionName = "4.9"
+        versionCode = 54
+        versionName = "4.9.1"
         // Galaxy Z Fold7 and all current phones are 64-bit ARM; keeps the APK small.
         ndk { abiFilters += "arm64-v8a" }
         // GGUF models: llama.cpp (from FA Fold KI), always optimised, 16 KB pages, shared C++ runtime

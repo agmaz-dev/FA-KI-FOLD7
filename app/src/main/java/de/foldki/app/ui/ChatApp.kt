@@ -1093,6 +1093,15 @@ private fun InputBar(
         }
     }
     DisposableEffect(Unit) { onDispose { if (dictating) voice.cancelListening() } }
+    // Ab 4.9.1: own TextFieldValue – when the text is cleared after sending, the keyboard's composing text
+    // (Samsung keyboard, voice typing) is dropped too; with a plain String the keyboard wrote it back into the field.
+    var field by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(text, androidx.compose.ui.text.TextRange(text.length))) }
+    val shown = if (field.text == text) field else androidx.compose.ui.text.input.TextFieldValue(text, androidx.compose.ui.text.TextRange(text.length))
+    /** Sends [msg]: running dictation is cancelled first, so no late result fills the field again. */
+    val sendNow: (String) -> Unit = { msg ->
+        if (dictating) { voice.cancelListening(); dictating = false }
+        vm.send(msg); setText("")
+    }
 
     Column(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         // Answer suggestions from the AI's reading of the last letter (like FA-PDF)
@@ -1105,11 +1114,11 @@ private fun InputBar(
         val chips: List<Pair<String, () -> Unit>> = when {
             ui.generating -> emptyList()
             ui.pending.isNotEmpty() -> listOf(
-                "Antwortschreiben" to { vm.send(P_REPLY + extra(text)); setText("") },
-                "Widerspruch" to { vm.send(P_OBJECT + extra(text)); setText("") },
-                "Zusammenfassen" to { vm.send(P_SUMMARY + extra(text)); setText("") },
+                "Antwortschreiben" to { sendNow(P_REPLY + extra(text)) },
+                "Widerspruch" to { sendNow(P_OBJECT + extra(text)) },
+                "Zusammenfassen" to { sendNow(P_SUMMARY + extra(text)) },
             )
-            else -> suggestions.map { sug -> sug to { vm.send("Schreib ein Antwortschreiben auf das Schreiben: $sug" + extra(text)); setText("") } }
+            else -> suggestions.map { sug -> sug to { sendNow("Schreib ein Antwortschreiben auf das Schreiben: $sug" + extra(text)) } }
         }
         if (chips.isNotEmpty()) {
             Row(
@@ -1160,7 +1169,7 @@ private fun InputBar(
                         fontSize = 16.sp, color = FK.Dim,
                     )
                     BasicTextField(
-                        value = text, onValueChange = setText, maxLines = 5,
+                        value = shown, onValueChange = { v -> field = v; if (v.text != text) setText(v.text) }, maxLines = 5,
                         textStyle = TextStyle(fontFamily = Inter, fontSize = 16.sp, color = FK.Text, lineHeight = 22.sp),
                         cursorBrush = SolidColor(FK.Accent),
                         modifier = Modifier.fillMaxWidth().heightIn(max = 140.dp),
@@ -1184,7 +1193,7 @@ private fun InputBar(
                     when {
                         ui.generating -> vm.stop()
                         text.isBlank() && ui.pending.isEmpty() && !dictating -> onVoiceMode()
-                        canSend -> { vm.send(text); setText("") }
+                        canSend -> sendNow(text)
                     }
                 }
             }

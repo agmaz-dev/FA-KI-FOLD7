@@ -74,3 +74,10 @@
 - Schleifenschutz in Antworten, Verlauf über 75 % wird gekürzt, Hitze-Pause erst ab „critical“, Speicher-Warnung vor dem Laden, Modell bleibt 2 Minuten im Hintergrund geladen, NPU-Leistung Sparsam/Ausgewogen/Maximal (`GGML_HEXAGON_POWER_MODE`), Fehlerbericht schneidet Antworten erst nach 12 000 Zeichen ab, „erstes Wort“ in der Statistik.
 - Hugging Face in der App: eine schmale Leiste (Zurück, eigene Adresszeile mit Kopieren/Einfügen, Schließen), unten „Modell erkannt · In App laden“. Erkunden zeigt nur Chat-Modelle.
 - Aufgeklappt: Trennwand mit breitem Griff, rastet bei 0, ⅓, Scharnier/½, ⅔, 1 ein, schneller Wisch schließt, Tippen auf den Griff einer geschlossenen Seite öffnet sie, Doppeltipp = Standard, Zurück-Geste am Griff ausgenommen.
+
+## Ab 4.9.1 (Fehlerbericht vom 23.11.2026)
+- **Eingabefeld:** eigenes `TextFieldValue` in `InputBar` – nach dem Senden wird auch der Tastatur-Entwurf (Samsung-Tastatur, Sprachtippen) verworfen; laufendes Diktat wird beim Senden abgebrochen (`sendNow`).
+- **Websuche nur wenn sinnvoll** (`wantsWeb`): nicht bei ein/zwei Wörtern, Fragen an die KI selbst oder zum Chat („du“, „dir“, „vorhin“), Schreib-/Übersetz-/Rechenaufgaben; immer bei klarem Bedarf (`WEB_STRONG`: heute, Preis, Wetter, wer ist …) oder Suchbefehl (`SEARCH_CMD`). Ergebnisse gehen mit `WEB_INTRO` ans Modell (nur verwenden, wenn passend; Suche nicht erwähnen).
+- „Quellen:“ und der PDF-Hinweis der App werden aus dem Verlauf und aus der Modellantwort entfernt (`appExtrasRemoved`) – keine doppelten Quellen mehr.
+- GitHub-Nachfragen nur noch an echten Werkzeug-Spuren erkennen (nicht am bloßen Wort „GitHub“ in einer Antwort).
+- PDF-Bitte bis 160 Zeichen (`PDF_MAKE`), Datums-Platzhalter auch mit Zusatz („[Heutiges Datum einfügen, z. B. …]“), Speicher-Warnung erst unter der Hälfte des Bedarfs.
