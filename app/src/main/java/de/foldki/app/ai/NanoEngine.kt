@@ -44,12 +44,7 @@ class NanoEngine {
      * The Prompt API is single-turn, so recent chat history is packed into one prompt.
      * Nano has a small context window, so only the last few turns are kept.
      */
-    fun reply(system: String, history: List<ChatMessage>, webSearch: Boolean): Flow<String> = flow {
-        var web = ""
-        if (webSearch) {
-            val question = history.lastOrNull { it.role == Role.USER }?.text.orEmpty()
-            web = WebLookup.search(question.take(100))
-        }
+    fun reply(system: String, history: List<ChatMessage>, web: String): Flow<String> = flow {
         val prompt = buildPrompt(system, history, web)
         model.generateContentStream(prompt).collect { chunk ->
             val text = chunk.candidates.firstOrNull()?.text.orEmpty()
@@ -112,7 +107,7 @@ Erfinde nichts, keine Listen, keine Begrüßungsfloskeln, kein Markdown."""
             val who = if (m.role == Role.USER) "Nutzer" else "Assistent"
             // Own earlier answers short and without markers, so the model does not just repeat them.
             val t = if (m.role == Role.USER) m.text.take(if (large) 6000 else 1500)
-                else de.foldki.app.export.DocumentParser.display(m.text).take(if (large) 1500 else 400)
+                else de.foldki.app.export.DocumentParser.display(m.text).take(if (large) 1500 else 250)
             "$who: $t"
         }.toMutableList()
         // Keep the prompt within the model's context: drop the oldest turns first.
@@ -139,7 +134,11 @@ Erfinde nichts, keine Listen, keine Begrüßungsfloskeln, kein Markdown."""
             if (web.isNotBlank()) append("Internetsuche:\n")
                 .append(web.take(if (large) 6000 else 3000)).append("\n\n")
             if (noText.isNotEmpty()) append("(Aus ${noText.joinToString { it.name }} konnte kein Text gelesen werden.)\n\n")
-            lines.forEach { append(it).append("\n") }
+            lines.dropLast(1).forEach { append(it).append("\n") }
+            // Ab 4.9: the current question last and clearly marked, so Nano does not answer an earlier one again.
+            val q = turns.lastOrNull { it.role == Role.USER }?.text?.take(if (large) 6000 else 1500)
+            if (q != null && lines.isNotEmpty() && lines.last().startsWith("Nutzer:")) append("\nAktuelle Frage des Nutzers (nur diese beantworten): ").append(q).append("\n")
+            else lines.lastOrNull()?.let { append(it).append("\n") }
             append("Assistent:")
         }
     }

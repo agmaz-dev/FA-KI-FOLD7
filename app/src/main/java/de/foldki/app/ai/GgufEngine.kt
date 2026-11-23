@@ -10,6 +10,7 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -103,7 +104,10 @@ class GgufEngine(context: Context) {
      * Chat answer, raw text (thinking included). [system] blank = no system message. [maxTokens] 0 = [MAX_ANSWER_TOKENS].
      * [temperature] null = llama.cpp default of FA Fold KI (0.6).
      */
-    fun chat(system: String, earlier: List<Pair<Boolean, String>>, question: String, temperature: Double? = null, maxTokens: Int = 0): Flow<String> =
+    fun chat(
+        system: String, earlier: List<Pair<Boolean, String>>, question: String, temperature: Double? = null, maxTokens: Int = 0,
+        topK: Int = 0, topP: Float = 0f, think: String = "",
+    ): Flow<String> =
         generate(
             buildList {
                 if (system.isNotBlank()) add("system" to system)
@@ -111,7 +115,8 @@ class GgufEngine(context: Context) {
                 add("user" to question)
             },
             if (maxTokens > 0) maxTokens else MAX_ANSWER_TOKENS, temperature?.toFloat() ?: 0.6f,
-            think = thinkMode() != THINK_OFF, budget = thinkBudget(),
+            think = if (think.isNotEmpty()) think == "on" else thinkMode() != THINK_OFF, budget = thinkBudget().let { if (it == 0 && think == "on") THINK_BUDGET else it },
+            topK = topK, topP = topP,
         )
 
     /** „Denken“ for thinking models (Modelle page): "off" = no thinking, "short" = at most [THINK_SHORT] tokens, "normal". */
@@ -128,10 +133,14 @@ class GgufEngine(context: Context) {
             step++
             while (msgs.size > 3 && msgs.sumOf { it.second.length } > 16_000) { msgs.removeAt(1); msgs.removeAt(1) }
             val sb = StringBuilder()
+            // Ab 4.9: stop as soon as the tool call is complete; an invented result after it is never kept.
             generate((if (system.isBlank()) emptyList() else listOf("system" to system)) + msgs, MAX_ANSWER_TOKENS, 0.3f, think = true, budget = THINK_BUDGET)
-                .collect { sb.append(it) }
-            val answer = ThinkParser.answerOnly(sb.toString(), LlamaNative.nativeThinkOpen())
-            de.foldki.app.data.DebugLog.write("GGUF GitHub Schritt $step: " + answer.replace("\n", "⏎").take(800))
+                .takeWhile { piece ->
+                    sb.append(piece)
+                    !(sb.contains('}') && GemmaGitHubAgent.callEnd(ThinkParser.answerOnly(sb.toString(), LlamaNative.nativeThinkOpen())) > 0)
+                }.collect { }
+            val answer = GemmaGitHubAgent.cutAtCall(ThinkParser.answerOnly(sb.toString(), LlamaNative.nativeThinkOpen()))
+            de.foldki.app.data.DebugLog.write("GGUF Werkzeug-Schritt $step: " + answer.replace("\n", "⏎").take(800))
             msgs += "assistant" to answer
             next = onTurn(answer)
             if (next != null) msgs += "user" to next
@@ -139,13 +148,13 @@ class GgufEngine(context: Context) {
         return step
     }
 
-    private fun generate(messages: List<Pair<String, String>>, maxTokens: Int, temp: Float, think: Boolean, budget: Int): Flow<String> = callbackFlow {
+    private fun generate(messages: List<Pair<String, String>>, maxTokens: Int, temp: Float, think: Boolean, budget: Int, topK: Int = 0, topP: Float = 0f): Flow<String> = callbackFlow {
         if (loadedPath == null) throw IllegalStateException("Kein GGUF-Modell geladen.")
         val job = launch(Dispatchers.Default) {
             genMutex.withLock {
                 val stats = LlamaNative.nativeGenerate(
                     messages.map { it.first }.toTypedArray(), messages.map { it.second }.toTypedArray(),
-                    maxTokens, temp, 20, 0.95f, think, if (think) budget else 0,
+                    maxTokens, temp, if (topK > 0) topK else 20, if (topP > 0f) topP else 0.95f, think, if (think) budget else 0,
                 ) { bytes -> trySend(String(bytes, Charsets.UTF_8)) }
                 val err = runCatching { JSONObject(stats).optString("error") }.getOrDefault("")
                 if (err.isNotBlank()) close(IllegalStateException(err)) else close()
