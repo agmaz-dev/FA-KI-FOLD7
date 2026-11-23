@@ -18,6 +18,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -65,7 +66,7 @@ class LocalEngine(context: Context) {
     val isLoaded: Boolean get() = engine != null
 
     /** Loads [modelPath] (another loaded model is closed first). Returns "GPU" or "CPU". */
-    fun loadAsync(modelPath: String, preferGpu: Boolean, onAttempt: (String) -> Unit = {}): Deferred<String> = synchronized(this) {
+    fun loadAsync(modelPath: String, preferGpu: Boolean, onAttempt: (String) -> Unit = {}, context: Int = 0): Deferred<String> = synchronized(this) {
         loading?.takeIf { it.isActive }?.let { return it }
         loadScope.async {
             mutex.withLock {
@@ -73,7 +74,8 @@ class LocalEngine(context: Context) {
                 closeNow()
                 // Qwen files without "gpu" in the name crash on the GPU (memory): blocked before loading.
                 if (preferGpu && GpuGuard.blocked(modelPath)) throw IllegalStateException(GpuGuard.TEXT)
-                val ctx = contextFor(modelPath)
+                // Ab 4.9: context per model (Modelle → Einstellungen), else as built.
+                val ctx = if (context > 0) context.coerceIn(1024, 32768) else contextFor(modelPath)
                 var lastError: Throwable? = null
                 // GPU builds ("gpu" in the name) only run on the GPU – never silently on the CPU.
                 val gpuOnly = preferGpu && HfModels.isGpuFile(modelPath)
@@ -111,7 +113,11 @@ class LocalEngine(context: Context) {
      * Chat answer, raw text (thinking included). [system] may be empty (then no system instruction at all).
      * [earlier] = all earlier turns of this chat; [key] = chat id. Emits text pieces (≈ one per token).
      */
-    fun chat(key: String, system: String, earlier: List<Turn>, question: String, questionId: String, answerId: String, temperature: Double? = null): Flow<String> = flow {
+    fun chat(
+        key: String, system: String, earlier: List<Turn>, question: String, questionId: String, answerId: String, temperature: Double? = null,
+        topK: Int = 0, topP: Float = 0f,
+    ): Flow<String> = flow {
+        samplerTopK = topK; samplerTopP = topP
         val e = engine ?: throw IllegalStateException("Modell ist nicht geladen.")
         val ids = earlier.map { it.id }
         val budget = inputBudgetChars
@@ -142,6 +148,10 @@ class LocalEngine(context: Context) {
         }
     }.flowOn(Dispatchers.Default)
 
+    // Ab 4.9: Top-K / Top-P per model (0 = app default 40 / 0.95).
+    @Volatile private var samplerTopK = 0
+    @Volatile private var samplerTopP = 0f
+
     /** New conversation with the newest earlier turns that fit into [room] characters. */
     private fun open(e: Engine, system: String, earlier: List<Turn>, room: Int, temperature: Double? = null): Conversation {
         dropKept()
@@ -155,7 +165,10 @@ class LocalEngine(context: Context) {
         keptChars = fit.sumOf { it.text.length }
         val initial = fit.map { if (it.user) Message.user(it.text) else Message.model(it.text) }
         // "Kreativität": null = the model's own sampler (nothing added).
-        val sampler = temperature?.let { SamplerConfig(topK = 40, topP = 0.95, temperature = it) }
+        val k = if (samplerTopK > 0) samplerTopK else 40
+        val p = if (samplerTopP > 0f) samplerTopP.toDouble() else 0.95
+        val sampler = if (temperature != null) SamplerConfig(topK = k, topP = p, temperature = temperature)
+            else if (samplerTopK > 0 || samplerTopP > 0f) SamplerConfig(topK = k, topP = p, temperature = 0.8) else null
         return if (system.isBlank()) e.createConversation(ConversationConfig(initialMessages = initial, samplerConfig = sampler))
         else e.createConversation(ConversationConfig(systemInstruction = Contents.of(system), initialMessages = initial, samplerConfig = sampler))
     }
@@ -180,34 +193,53 @@ class LocalEngine(context: Context) {
     }
 
     /**
-     * Multi-step conversation (GitHub tasks): the model answers, [onTurn] gets the answer and returns the next
-     * message (e.g. a tool result) or null to stop. One conversation, so the model keeps the earlier steps.
+     * Multi-step conversation (tools): the model answers, [onTurn] gets the answer and returns the next message (e.g. a
+     * tool result) or null to stop. Ab 4.9: the model stops writing as soon as its tool call is complete, and every step
+     * starts a fresh conversation from the kept turns – so an invented "ERGEBNIS" after the call never stays in the
+     * history (only the real result of the app does).
      */
-    suspend fun session(system: String, first: String, maxSteps: Int, onTurn: suspend (String) -> String?) =
+    suspend fun session(system: String, first: String, maxSteps: Int, onTurn: suspend (String) -> String?, sampler: SamplerConfig? = null) =
         kotlinx.coroutines.withContext(Dispatchers.Default) {
             val e = engine ?: throw IllegalStateException("Modell ist nicht geladen.")
             dropKept()
-            val conv = e.createConversation(
-                ConversationConfig(
-                    systemInstruction = Contents.of(system),
-                    samplerConfig = SamplerConfig(topK = 20, topP = 0.9, temperature = 0.2),
-                ),
-            )
-            try {
-                var msg: String? = first
-                var step = 0
-                while (msg != null && step < maxSteps) {
-                    step++
-                    val sb = StringBuilder()
-                    conv.sendMessageAsync(msg).collect { m -> sb.append(text(m)) }
-                    val answer = ThinkParser.answerOnly(sb.toString(), HfModels.isThinking(loadedPath.orEmpty()))
-                    de.foldki.app.data.DebugLog.write("Lokal GitHub Schritt $step: " + answer.replace("\n", "⏎").take(800))
-                    msg = onTurn(answer)
+            val turns = ArrayList<Message>()
+            val texts = ArrayList<Int>() // length of each turn, to stay inside the context
+            val thinking = HfModels.isThinking(loadedPath.orEmpty())
+            var msg: String? = first
+            var step = 0
+            while (msg != null && step < maxSteps) {
+                step++
+                // Keep the newest turns that fit next to the instruction and the new message.
+                val room = inputBudgetChars - system.length - msg.length
+                while (turns.size > 2 && texts.sum() > room) { turns.removeAt(0); turns.removeAt(0); texts.removeAt(0); texts.removeAt(0) }
+                val conv = e.createConversation(
+                    ConversationConfig(
+                        systemInstruction = Contents.of(system),
+                        initialMessages = turns.toList(),
+                        samplerConfig = sampler ?: SamplerConfig(topK = 20, topP = 0.9, temperature = 0.2),
+                    ),
+                )
+                val sb = StringBuilder()
+                var cut = false
+                try {
+                    conv.sendMessageAsync(msg).takeWhile { m ->
+                        sb.append(text(m))
+                        // Stop as soon as the tool call is complete (after the thoughts of a thinking model).
+                        val done = sb.contains('}') && de.foldki.app.ai.GemmaGitHubAgent.callEnd(ThinkParser.answerOnly(sb.toString(), thinking)) > 0
+                        if (done) cut = true
+                        !done
+                    }.collect { }
+                } finally {
+                    if (cut) runCatching { conv.cancelProcess() }
+                    runCatching { conv.close() }
                 }
-                step
-            } finally {
-                runCatching { conv.close() }
+                val answer = de.foldki.app.ai.GemmaGitHubAgent.cutAtCall(ThinkParser.answerOnly(sb.toString(), thinking))
+                de.foldki.app.data.DebugLog.write("Lokal Werkzeug-Schritt $step: " + answer.replace("\n", "⏎").take(800))
+                turns += Message.user(msg); texts += msg.length
+                turns += Message.model(answer); texts += answer.length
+                msg = onTurn(answer)
             }
+            step
         }
 
     private fun text(m: Message): String = m.contents.contents.filterIsInstance<Content.Text>().joinToString("") { it.text }
