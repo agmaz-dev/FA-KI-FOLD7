@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -130,7 +131,7 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, on
 
     val title = when (page) {
         "nano" -> "Gemini Nano"; "models" -> "Modelle"; "hf" -> "Erkunden"; "claude" -> "Claude (online)"; "github" -> "GitHub"
-        "sender" -> "Absender & Unterschrift"; "voice" -> "Stimmen"; "brief" -> "Tagesstart"
+        "sender" -> "Absender & Unterschrift"; "voice" -> "Stimme & Sprache"; "brief" -> "Tagesstart"
         "system" -> "Systemanweisung"; "memory" -> "Gedächtnis"; "report" -> "Fehlerbericht"
         "server" -> "PC-Server"; "history" -> "Verlauf"; "saved" -> "Verlauf"; "s3" -> "S3-Sicherung"; "compute" -> "Rechnen auf"; "gpu" -> "GPU-Anteil"; "instructions" -> "Meine Anweisungen"; "tools" -> "Werkzeuge"; "mcp" -> "MCP-Werkzeuge"
         else -> "Einstellungen"
@@ -139,7 +140,7 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, on
     Surface(color = FK.Bg, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             // Top bar like the mock-ups: ☰ on pages from the menu, ‹ on sub pages, ✕ on "PC-Server"; the page's action on the right.
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (!chrome.hideBar) Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 val override = chrome.back
                 when {
                     override != null -> NavBtn(Icons.AutoMirrored.Filled.ArrowBack, "Zurück", onClick = override)
@@ -206,11 +207,15 @@ private fun Overview(
     val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?" }
     val mem by vm.memories.collectAsStateWithLifecycle()
 
-    // Exactly like mock-up 15 (design/15-einstellungen.png).
-    SectionLabel("KI")
+    // Ab 4.9: six clear groups (design "neue Menü-Ordnung"); the side menu only holds the chats.
+    SectionLabel("KI & Modelle", top = 4.dp)
     Group {
-        SettingRow("Systemanweisung", null, leading = { Tile(Icons.Default.Person, FK.T4) }, onClick = { open("system") }) {
-            RowValue(if (system.isBlank()) "leer" else "eigene"); Chevron()
+        SettingRow("Modelle", "herunterladen, wählen, Einstellungen pro Modell", leading = { Tile(Icons.Default.Memory, FK.T3) }, onClick = { open("models") }) {
+            RowValue(ui.activeName.take(18)); Chevron()
+        }
+        GroupDivider()
+        SettingRow("PC-Server", null, leading = { Tile(Icons.Default.Dns, FK.T6) }, onClick = { open("server") }) {
+            RowValue(if (ui.activeServer != null) "aktiv" else if (ui.servers.isEmpty()) "aus" else "${ui.servers.size}"); Chevron()
         }
         GroupDivider()
         SettingRow("Rechnen auf", null, leading = { Tile(Icons.Default.Memory, FK.T3) }, onClick = { open("compute") }) {
@@ -221,27 +226,51 @@ private fun Overview(
             RowValue("${vm.settings.gpuPercent} %"); Chevron()
         }
     }
-    SectionLabel("Briefe")
+    SectionLabel("Verhalten")
     Group {
-        SettingRow("Absenderprofile", null, leading = { Tile(Icons.Default.Description, FK.T1) }, onClick = { open("sender") }) {
-            RowValue("${list.size}"); Chevron()
+        SettingRow("Meine Anweisungen", "auch Datum & App-Wissen", leading = { Tile(Icons.Default.Person, FK.T4) }, onClick = { open("instructions") }) {
+            RowValue(ui.chatInstructionName.let { if (it == "Standard") "keine" else it }.take(16)); Chevron()
         }
         GroupDivider()
-        SettingRow("Unterschrift", null, leading = { Tile(Icons.Default.Edit, FK.T8) }, onClick = { open("sender") }) { Chevron() }
+        SettingRow("Systemanweisung", null, leading = { Tile(Icons.Default.Edit, FK.T4) }, onClick = { open("system") }) {
+            RowValue(if (system.isBlank()) "leer" else "eigene"); Chevron()
+        }
+        GroupDivider()
+        SettingRow("Gedächtnis", null, leading = { Tile(Icons.Default.Psychology, FK.T6) }, onClick = { open("memory") }) {
+            RowValue("${mem.size}"); Chevron()
+        }
     }
-    SectionLabel("Verbindungen")
+    SectionLabel("Sprache")
     Group {
+        SettingRow("Stimme, Diktieren & Anruf", null, leading = { Tile(Icons.AutoMirrored.Filled.VolumeUp, FK.T5) }, onClick = { open("voice") }) {
+            RowValue(vm.voice.voiceLabel); Chevron()
+        }
+    }
+    SectionLabel("Werkzeuge")
+    Group {
+        SettingRow("Websuche, GitHub, MCP, Tagesstart", null, leading = { Tile(Icons.Default.Build, FK.T8) }, onClick = { open("tools") }) { Chevron() }
+        GroupDivider()
         SettingRow("GitHub", null, leading = { Tile(Icons.Default.Code, FK.T9) }, onClick = { open("github") }) {
             RowValue(if (ghToken.isBlank()) "nicht verbunden" else "verbunden"); Chevron()
+        }
+    }
+    SectionLabel("Briefe")
+    Group {
+        SettingRow("Absender & Unterschrift", null, leading = { Tile(Icons.Default.Description, FK.T1) }, onClick = { open("sender") }) {
+            RowValue(if (list.isEmpty()) "leer" else "${list.size} Profil" + if (list.size > 1) "e" else ""); Chevron()
+        }
+    }
+    SectionLabel("Daten & Hilfe")
+    Group {
+        SettingRow("Verlauf & Chats löschen", null, leading = { Tile(Icons.Default.ChatBubbleOutline, FK.T2) }, onClick = { open("history") }) {
+            RowValue("${ui.conversations.size}"); Chevron()
         }
         GroupDivider()
         SettingRow("S3-Sicherung", null, leading = { Tile(Icons.Default.Cloud, FK.T2) }, onClick = { open("s3") }) {
             RowValue(if (vm.settings.s3Auto) "an" else "aus"); Chevron()
         }
-    }
-    SectionLabel("Hilfe")
-    Group {
-        SettingRow("Fehlerbericht", null, leading = { Tile(Icons.Default.Build, FK.T5) }, onClick = { open("report") }) { Chevron() }
+        GroupDivider()
+        SettingRow("Fehlerbericht", null, leading = { Tile(Icons.Default.ReportProblem, FK.T5) }, onClick = { open("report") }) { Chevron() }
         GroupDivider()
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Version", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = FK.Text, modifier = Modifier.weight(1f))
@@ -628,43 +657,91 @@ private fun GitHubPage(vm: ChatViewModel, token: String, setToken: (String) -> U
     )
 }
 
-/** "Stimmen" exactly like mock-up 4 (Supertonic 3: Tessa & Caleb only, Whisper for input). */
+/**
+ * "Stimme & Sprache" (ab 4.9): Phonon with Anton (like FA KI Desktop), live dictation (ML Kit, no Google window) with
+ * Whisper as fallback, and the call mode. Supertonic only while Phonon is missing in the APK.
+ */
 @Composable
 private fun VoicePage(
     vm: ChatViewModel, stStatus: String, stBusy: Boolean, stReady: Boolean,
     stVoice: String, setVoice: (String) -> Unit, rate: Float, setRate: (Float) -> Unit,
 ) {
-    var showRate by remember { mutableStateOf(false) }
+    val phStatus by vm.phStatus.collectAsStateWithLifecycle()
+    val phBusy by vm.phBusy.collectAsStateWithLifecycle()
+    val liveOk by vm.voice.liveOk.collectAsStateWithLifecycle()
+    var phVoice by remember { mutableStateOf(vm.settings.phononVoice) }
+    var token by remember { mutableStateOf(vm.settings.hfToken) }
     var auto by remember { mutableStateOf(vm.settings.autoSpeak) }
-    Sub("Vorlesen mit Supertonic 3 – offline auf dem Handy.")
-    Group {
-        Supertonic.VOICES.entries.forEachIndexed { i, (id, v) ->
-            if (i > 0) GroupDivider()
-            val female = id == "tessa"
-            Row(
-                Modifier.fillMaxWidth().clickable { setVoice(id) }.padding(horizontal = 16.dp, vertical = 11.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(
-                    Modifier.size(44.dp).clip(androidx.compose.foundation.shape.CircleShape).background(
-                        androidx.compose.ui.graphics.Brush.linearGradient(
-                            if (female) listOf(androidx.compose.ui.graphics.Color(0xFFFF375F), FK.Warn) else listOf(FK.Accent, FK.T7.first),
-                        ),
-                    ),
-                    contentAlignment = Alignment.Center,
-                ) { Text(if (female) "T" else "C", color = androidx.compose.ui.graphics.Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp) }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(if (female) "Tessa" else "Caleb", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = FK.Text)
-                    Text(if (female) "weiblich · Standard" else "männlich", fontSize = 13.sp, color = FK.Muted)
+    var live by remember { mutableStateOf(vm.settings.liveDictation) }
+    var showRate by remember { mutableStateOf(false) }
+    val phLib = de.foldki.app.voice.Phonon.libAvailable
+    val phReady = phLib && vm.voice.phonon.modelReady
+
+    Sub("Vorlesen mit Phonon – offline auf dem Handy, dieselbe Stimme wie in FA KI Desktop.")
+    if (phLib) {
+        SectionLabel("Stimme", top = 4.dp)
+        Group {
+            de.foldki.app.voice.Phonon.VOICES.forEachIndexed { i, v ->
+                if (i > 0) GroupDivider()
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 52.dp).clickable { phVoice = v.key; vm.setPhononVoice(v.key) }.padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(v.name, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = FK.Text)
+                        Text((if (v.female) "weiblich" else "männlich") + if (v.key == de.foldki.app.voice.Phonon.DEFAULT_VOICE) " · Standard" else "", fontSize = 13.sp, color = FK.Muted)
+                    }
+                    Box(
+                        Modifier.size(32.dp).clip(androidx.compose.foundation.shape.CircleShape).background(FK.Surface2)
+                            .clickable(enabled = phReady && !phBusy) { vm.voice.rate = rate; vm.voice.previewPhonon(v.key) { vm.notify("Stimme: $it") } },
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Default.PlayArrow, "Probehören", tint = if (phReady) FK.Accent else FK.Dim, modifier = Modifier.size(16.dp)) }
+                    Spacer(Modifier.width(12.dp))
+                    Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
+                        if (phVoice == v.key) Icon(Icons.Default.Check, "Gewählt", tint = FK.Accent, modifier = Modifier.size(20.dp))
+                    }
                 }
-                Box(
-                    Modifier.size(30.dp).clip(androidx.compose.foundation.shape.CircleShape).background(FK.Surface2)
-                        .clickable(enabled = vm.voice.supertonic.isReady && !stBusy) { vm.voice.rate = rate; vm.voice.previewSupertonic(id) { vm.notify("Stimme: $it") } },
-                    contentAlignment = Alignment.Center,
-                ) { Icon(Icons.Default.PlayArrow, "Probehören", tint = FK.Accent, modifier = Modifier.size(16.dp)) }
-                Spacer(Modifier.width(12.dp))
-                Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) { if (stVoice == id) Text("✓", color = FK.Accent, fontSize = 20.sp) }
+            }
+        }
+        SectionLabel("Phonon-Modell")
+        Group {
+            SettingRow("Phonon 40M (Deutsch)", if (phReady) "${de.foldki.app.voice.Phonon.APPROX} · eingerichtet" else phStatus) {
+                when {
+                    phBusy -> { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = FK.Accent); Spacer(Modifier.width(8.dp)); Cta("Abbrechen", ghost = true) { vm.cancelPhonon() } }
+                    phReady -> Pill("Bereit", FK.Ok)
+                    else -> Cta("Einrichten", enabled = token.isNotBlank()) { vm.setupPhonon(token) }
+                }
+            }
+            if (!phReady) {
+                FkField("Hugging-Face-Token", token, { token = it }, password = true)
+                Note(
+                    "Einmalig nötig: das Phonon-Modell ist auf Hugging Face geschützt. Auf huggingface.co/gradium/phonon-40m-multilingual anmelden, " +
+                        "„Agree“ tippen (Freigabe kommt sofort), dann unter Settings → Access Tokens einen Token (Read) anlegen und hier einfügen. " +
+                        "Der Token bleibt nur auf dem Handy. Lizenz: CC BY-NC 4.0 (privat erlaubt).",
+                    Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp),
+                )
+            } else {
+                GroupDivider()
+                SettingRow("Entfernen", "gibt ${de.foldki.app.voice.Phonon.APPROX} frei", onClick = { vm.removePhonon() }) { Chevron() }
+            }
+        }
+    } else {
+        Note("Der Phonon-Teil fehlt in dieser APK (Bau fehlgeschlagen). Bis dahin liest Supertonic vor.", Modifier.padding(horizontal = 6.dp, vertical = 6.dp))
+        SectionLabel("Supertonic (Ersatz)")
+        Group {
+            Supertonic.VOICES.entries.forEachIndexed { i, (id, v) ->
+                if (i > 0) GroupDivider()
+                SettingRow(v.second, null, onClick = { setVoice(id) }) {
+                    if (stVoice == id) Icon(Icons.Default.Check, "Gewählt", tint = FK.Accent, modifier = Modifier.size(20.dp))
+                }
+            }
+            GroupDivider()
+            SettingRow("Supertonic 3", if (vm.voice.supertonic.isReady) "250 MB · eingerichtet" else if (stBusy) stStatus else "noch nicht eingerichtet") {
+                when {
+                    stBusy -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = FK.Accent)
+                    vm.voice.supertonic.isReady -> Pill("Bereit", FK.Ok)
+                    else -> Cta("Einrichten") { vm.setupVoice() }
+                }
             }
         }
     }
@@ -677,21 +754,27 @@ private fun VoicePage(
         GroupDivider()
         SettingRow("Antworten automatisch vorlesen", null) { FkToggle(auto, { on -> auto = on; vm.setAutoSpeak(on) }) }
     }
-    SectionLabel("Spracheingabe")
+    SectionLabel("Diktieren")
     Group {
-        SettingRow("Whisper small", "Erkennung auf dem Handy", leading = { Tile(Icons.Default.Mic, FK.Danger to androidx.compose.ui.graphics.Color.White) }) {
-            if (stReady) Pill("Installiert", FK.Ok) else Pill("Fehlt", FK.Warn)
+        SettingRow("Live-Diktat", if (liveOk) "Wörter erscheinen beim Sprechen · ohne Google-Fenster" else "auf diesem Handy noch nicht bereit", leading = { Tile(Icons.Default.Mic, FK.T5) }) {
+            FkToggle(live, { on -> live = on; vm.setLiveDictation(on) })
         }
-    }
-    SectionLabel("Modell")
-    Group {
-        SettingRow("Supertonic 3", if (stReady) "250 MB · eingerichtet" else if (stBusy) stStatus else "noch nicht eingerichtet") {
+        if (live && !liveOk) {
+            GroupDivider()
+            SettingRow("Deutsche Erkennung laden", "einmalig von Android", onClick = { vm.downloadLive() }) { Chevron() }
+        }
+        GroupDivider()
+        SettingRow("Whisper (Ersatz)", if (vm.voice.whisper.isReady) "auf dem Handy · genauer, aber langsamer" else if (stBusy) stStatus else "nicht eingerichtet") {
             when {
-                stBusy -> { CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = FK.Accent); Spacer(Modifier.width(8.dp)); Cta("Abbrechen", ghost = true) { vm.cancelVoiceSetup() } }
-                stReady -> Pill("Bereit", FK.Ok)
-                else -> Cta("Einrichten") { vm.setupVoice() }
+                stBusy -> CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = FK.Accent)
+                vm.voice.whisper.isReady -> Pill("Installiert", FK.Ok)
+                else -> Cta("Laden", ghost = true) { vm.setupWhisper() }
             }
         }
+    }
+    SectionLabel("Anruf-Modus")
+    Group {
+        SettingRow("So funktioniert es", "Kurve-Symbol im Chat antippen: zuhören → antworten → vorlesen, Satz für Satz, ohne Denken. Auf den Kreis tippen unterbricht.", leading = { Tile(Icons.Default.ChatBubbleOutline, FK.T2) }) {}
     }
 }
 
@@ -759,6 +842,8 @@ class PageChrome {
     var action by mutableStateOf<(@Composable () -> Unit)?>(null)
     var back by mutableStateOf<(() -> Unit)?>(null)
     var hideTitle by mutableStateOf(false)
+    /** Ab 4.9: the page draws its own slim bar (Hugging Face web page). */
+    var hideBar by mutableStateOf(false)
 }
 
 val LocalPageChrome = androidx.compose.runtime.staticCompositionLocalOf { PageChrome() }
@@ -773,8 +858,8 @@ fun PageAction(content: @Composable () -> Unit) {
 
 /** While shown: the ‹ button and the back gesture do [onBack] instead, and the large title is hidden if [hideTitle]. */
 @Composable
-fun PageBack(onBack: () -> Unit, hideTitle: Boolean = false) {
+fun PageBack(onBack: () -> Unit, hideTitle: Boolean = false, hideBar: Boolean = false) {
     val c = LocalPageChrome.current
-    androidx.compose.runtime.SideEffect { c.back = onBack; c.hideTitle = hideTitle }
-    DisposableEffect(Unit) { onDispose { c.back = null; c.hideTitle = false } }
+    androidx.compose.runtime.SideEffect { c.back = onBack; c.hideTitle = hideTitle; c.hideBar = hideBar }
+    DisposableEffect(Unit) { onDispose { c.back = null; c.hideTitle = false; c.hideBar = false } }
 }
