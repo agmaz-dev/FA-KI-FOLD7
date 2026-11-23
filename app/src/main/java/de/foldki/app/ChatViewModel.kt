@@ -122,6 +122,8 @@ private val JUST_READ = Regex("(was steht|zusammenfass|fass .* zusammen|erklär|
 
 /** Short requests like "als PDF bitte": the app makes the PDF itself from the last answer (the model cannot). */
 private val PDF_WORD = Regex("\\bpdf\\b", RegexOption.IGNORE_CASE)
+/** "als PDF erstellen", "erstelle es als PDF", "mach eine PDF". */
+private val PDF_MAKE = Regex("(als|eine|die|ein) pdf|pdf (erstell|mach|generier)|(erstell|mach|generier)\\w* [^.?!]{0,30}pdf", RegexOption.IGNORE_CASE)
 /** Short follow-ups that ask for a file of the last letter/document ("so erstelle", "mach daraus eine Datei", "zum Drucken"). */
 private val PDF_FOLLOW = Regex(
     "^(so|ok|ja|gut)?,? ?(erstell|mach|generier|exportier|speicher|druck)\\w*( (es|das|ihn|sie|daraus|davon|mir|bitte|jetzt|fertig|eine datei|ein dokument|als datei))*[ .!]*$|" +
@@ -134,6 +136,16 @@ private val PDF_CLAIM = Regex("(pdf|datei|dokument)[^.\\n]{0,50}(erstellt|generi
 private val SMALL_TALK = Regex("^(hallo|hi|hey|moin|servus|danke|vielen dank|guten (morgen|tag|abend)|gute nacht|tschüss|ok|okay|super|cool|alles klar)\\b", RegexOption.IGNORE_CASE)
 /** Follow-ups that need the earlier question for a web search ("ist an", "guck mal dort", "und der Preis?"). */
 private val REFERS_BACK = Regex("\\b(dort|da|das|dazu|davon|darüber|ist an|nochmal|weiter|und der|und die|und das|wie viel|was kostet)\\b", RegexOption.IGNORE_CASE)
+/** Ab 4.9.1: questions that clearly need current facts from the internet. */
+private val WEB_STRONG = Regex("aktuell|heute|gestern|morgen|neueste|neuigkeit|news|nachrichten|preis|kostet|kosten|wetter|öffnungszeit|geöffnet|\\bkurs\\b|ergebnis|spielstand|tabelle|wer ist|wer war|wer hat|wann ist|wann war|wann kommt|wo ist|wo liegt|wo gibt|adresse|telefonnummer|fahrplan|abfahrt|verkehr|stau|\\b20[2-3]\\d\\b|kaufen|angebot|shop|test(bericht|sieger)?\\b|vergleich|bewertung", RegexOption.IGNORE_CASE)
+/** An explicit search command ("such mal …", "google …", "schau im Internet nach …"). */
+private val SEARCH_CMD = Regex("^(such|google|googel|recherchier)|\\b(such|schau|guck)\\w* (mal )?(im internet|online|im netz|nach)\\b|im internet (nach|suchen|recherchieren)", RegexOption.IGNORE_CASE)
+/** Questions about the AI itself or the chat ("Was ist mit dir los?", "Warum hast du …") – never searched. */
+private val ABOUT_AI = Regex("\\b(du|dir|dich|dein\\w*)\\b|\\b(deine|die|eure) antwort|was hast du|vorhin|eben gesagt|oben geschrieben", RegexOption.IGNORE_CASE)
+/** Writing, translating and calculating tasks: the model does them itself, no search. */
+private val OWN_TASK = Regex("^(bitte )?(schreib|formulier|dicht|erfind|übersetz|rechne|korrigier|verbesser|kürz|umformulier)", RegexOption.IGNORE_CASE)
+/** Text in front of web results: the model uses them only if they fit and does not talk about the search. */
+private const val WEB_INTRO = "Hintergrund aus dem Internet (nur verwenden, wenn es zur Frage passt; nicht erwähnen, dass gesucht wurde):\n"
 /** Filler words removed from a web query. */
 private val FILLER = Regex("\\b(bitte|kannst du|könntest du|kann man|mal|mir|uns|such(e|en)?|im internet|online|im netz|google|googel|schau|guck|nach|nachsehen|nachschauen|für mich|ich möchte|ich will|wissen)\\b", RegexOption.IGNORE_CASE)
 /** Placeholders in a letter for the user's own data. */
@@ -145,7 +157,7 @@ private val PHONE_PH = Regex("\\[\\s*(ihre |deine )?(telefon(nummer)?|tel\\.?)\\
 private val MAIL_PH = Regex("\\[\\s*(ihre |deine )?(e-?mail(-adresse)?)\\s*\\]", RegexOption.IGNORE_CASE)
 private val INFO_QUESTION = Regex("^(was|wie|warum|wieso|weshalb|welche[rs]?|wo|wann)\\b", RegexOption.IGNORE_CASE)
 /** Placeholder the model sometimes leaves instead of a date. */
-private val DATE_PLACEHOLDER = Regex("\\[\\s*(aktuelles |heutiges )?datum( einfügen| eintragen)?\\s*\\]", RegexOption.IGNORE_CASE)
+private val DATE_PLACEHOLDER = Regex("\\[\\s*(aktuelles |heutiges )?datum[^\\]\\n]{0,50}\\]", RegexOption.IGNORE_CASE)
 /** Start of the app's own answer to a PDF request (never itself turned into a PDF). */
 private const val PDF_REPLY = "📄 PDF-Vorschau geöffnet"
 
@@ -472,7 +484,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // Ab 4.9: warn before a load that leaves too little memory (Android then ends the app).
         val needMb = f.length() / 1_000_000 * (if (isGguf) 11 else 12) / 10
         val freeMb = freeRamMb()
-        if (freeMb in 1 until needMb + 1500) {
+        if (freeMb in 1 until needMb / 2) {
             de.foldki.app.data.DebugLog.write("Speicher knapp vor dem Laden: frei $freeMb MB, Modell braucht ca. $needMb MB")
             notify("Speicher knapp: frei ${"%.1f".format(java.util.Locale.GERMANY, freeMb / 1000.0)} GB, das Modell braucht ca. " +
                 "${"%.1f".format(java.util.Locale.GERMANY, needMb / 1000.0)} GB. Andere Apps schließen, sonst beendet Android die App.")
@@ -789,7 +801,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (GITHUB_WORDS.containsMatchIn(prompt)) return true
         // follow-ups ("ja, mach weiter", "ist verbunden") in a chat that already worked on GitHub
         if (history.takeLast(6).any { m ->
-            m.role == Role.ASSISTANT && listOf("✅ Freigegeben", "⛔ Abgelehnt", "🔎 Suche:", "📄 Lese ", "📁 ", "⚙️ Build-Status", "GitHub").any { m.text.contains(it) }
+            m.role == Role.ASSISTANT && listOf("✅ Freigegeben", "⛔ Abgelehnt", "🔎 Suche:", "📄 Lese ", "📁 ", "⚙️ Build-Status").any { m.text.contains(it) }
         }) return true
         // Ab 4.9: a short follow-up right after a GitHub question stays with GitHub (also dictated ones with recognition errors).
         val earlierUser = history.dropLast(1).filter { it.role == Role.USER }.takeLast(2)
@@ -933,7 +945,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val prompt = text.trim().ifEmpty { if (pendingFiles.isNotEmpty()) "Was steht in diesem Dokument? Fasse es kurz zusammen." else "" }
         if (prompt.isEmpty() || _ui.value.generating || _ui.value.importing) return
         // "als PDF bitte": the app makes the PDF from the last answer itself (no model needed).
-        if (pendingFiles.isEmpty() && prompt.length <= 80 && !INFO_QUESTION.containsMatchIn(prompt)) {
+        if (pendingFiles.isEmpty() && (prompt.length <= 80 || (prompt.length <= 160 && PDF_MAKE.containsMatchIn(prompt))) && !INFO_QUESTION.containsMatchIn(prompt)) {
             val lastAnswer = _ui.value.current?.messages?.lastOrNull { it.role == Role.ASSISTANT && !it.isError && it.text.isNotBlank() && !it.text.startsWith(PDF_REPLY) }
             // "als PDF" always; "so erstelle", "mach daraus eine Datei", "zum Drucken" only after a letter/document.
             val isDoc = lastAnswer != null && (DocumentParser.parse(lastAnswer.text).document != null || LETTER_WORDS.containsMatchIn(lastAnswer.text.take(300)))
@@ -1091,7 +1103,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     val last = turns.lastOrNull { it.role == Role.USER }
                     if (last != null) {
                         val earlier = turns.subList(0, turns.lastIndexOf(last)).takeLast(20).map { turnOf(it, 6000) }.map { it.user to it.text }
-                        val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + turnOf(last, 20000).text
+                        val question = (if (webText.isBlank()) "" else WEB_INTRO + webText + "\n\n") + turnOf(last, 20000).text
                         de.foldki.app.data.DebugLog.write("START PC-Server ${server.typeLabel} ${server.base} · ${server.model} · Frage ${question.length}")
                         ServerEngine.chat(server, system, earlier, question, temp, engineMax).takeWhile { !stopNow }.collect { onPiece(it) }
                     }
@@ -1108,7 +1120,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         .map { (it.user) to it.text }
                     val room = (budget * 0.8).toInt() - webText.length - last.text.length
                     val own = turnOf(last, room.coerceAtLeast(0))
-                    val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + own.text
+                    val question = (if (webText.isBlank()) "" else WEB_INTRO + webText + "\n\n") + own.text
                     de.foldki.app.data.DebugLog.write("START GGUF ${models.nameOf(act)} · ${gguf.backendUsed} · Kontext ${gguf.contextTokens} · Frage ${question.length}")
                     var first = true
                     gguf.chat(system, earlier, question, temp, engineMax, params.topK, params.topP, params.think).takeWhile { !stopNow }.collect {
@@ -1128,7 +1140,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         notify("Die Datei ist zu lang für dieses Modell – es liest nur den Anfang (ca. ${room.coerceAtLeast(0)} Zeichen).")
                     // Qwen thinking off (soft switch of the Qwen chat template).
                     val noThink = if (params.think == "off" && act.lowercase().contains("qwen")) " /no_think" else ""
-                    val question = (if (webText.isBlank()) "" else "Internetsuche:\n$webText\n\n") + own.text + noThink
+                    val question = (if (webText.isBlank()) "" else WEB_INTRO + webText + "\n\n") + own.text + noThink
                     // For the error report: what goes to the model (a native crash is only seen at the next start).
                     de.foldki.app.data.DebugLog.write(
                         "START ${models.nameOf(act)} · ${llm.backendUsed} · Kontext ${llm.contextTokens} Tokens · " +
@@ -1141,7 +1153,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val end = ThinkParser.split(raw.toString(), thinkOpenName || ggufThink, finished = true)
                 val now = System.currentTimeMillis()
                 // Ab 4.9: the app checks the answer – sums recomputed, own data instead of placeholders, loops cut, sources.
-                var finalText = end.answer
+                var finalText = appExtrasRemoved(end.answer)
                 if (looped) finalText = cutRepeats(finalText) + "\n\n(Wiederholung erkannt – angehalten.)"
                 if (!finalText.contains("```")) finalText = de.foldki.app.ai.Calc.fixEquations(finalText)
                 finalText = fillPlaceholders(finalText)
@@ -1210,7 +1222,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** One chat turn for the local model: a question with the text of its attached files, or an earlier answer. */
     private fun turnOf(m: ChatMessage, fileChars: Int): LocalEngine.Turn {
-        if (m.role != Role.USER) return LocalEngine.Turn(m.id, false, DocumentParser.display(m.text).take(2000))
+        if (m.role != Role.USER) return LocalEngine.Turn(m.id, false, appExtrasRemoved(DocumentParser.display(m.text)).take(2000))
         val files = StringBuilder()
         var budget = fileChars
         m.attachments.forEach { a ->
@@ -1222,6 +1234,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         return LocalEngine.Turn(m.id, true, files.toString() + m.text)
     }
 
+    /** Ab 4.9.1: the app's own additions (source list, PDF note) are not part of the model's answer. */
+    private fun appExtrasRemoved(t: String): String =
+        t.replace(Regex("\\n*Quellen:\\n(•[^\\n]*\\n?)+"), "\n").replace(Regex("\\n*📄 PDF-Vorschau geöffnet[^\\n]*"), "").trim()
+
     /** Sources (title, link) of the last internet search; listed under the answer. */
     private var lastSources: List<Pair<String, String>> = emptyList()
 
@@ -1230,8 +1246,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val p = prompt.trim()
         return when {
             p.length < 4 || docTask || hasFiles || toolTask -> false
+            // Ab 4.9.1: one or two words ("jetzt", "und?", "habe ich") are no search question.
+            p.split(Regex("\\s+")).size < 3 && !WEB_STRONG.containsMatchIn(p) -> false
             SMALL_TALK.containsMatchIn(p) && p.length < 40 -> false
             PDF_WORD.containsMatchIn(p) || PDF_FOLLOW.containsMatchIn(p) -> false
+            // Ab 4.9.1: clear need for current facts or an explicit search command -> search.
+            WEB_STRONG.containsMatchIn(p) || SEARCH_CMD.containsMatchIn(p) -> true
+            // Questions to the AI itself or about the chat: no search ("Was ist mit dir los?").
+            ABOUT_AI.containsMatchIn(p) -> false
+            OWN_TASK.containsMatchIn(p) -> false
             else -> true
         }
     }

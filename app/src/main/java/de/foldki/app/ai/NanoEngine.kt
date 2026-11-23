@@ -131,7 +131,7 @@ Erfinde nichts, keine Listen, keine Begrüßungsfloskeln, kein Markdown."""
         return buildString {
             if (system.isNotBlank()) append(system).append("\n\n")
             if (docs.isNotEmpty()) append("Inhalt der angehängten Dateien:\n").append(docs)
-            if (web.isNotBlank()) append("Internetsuche:\n")
+            if (web.isNotBlank()) append("Hintergrund aus dem Internet (nur verwenden, wenn es zur Frage passt; nicht erwähnen, dass gesucht wurde):\n")
                 .append(web.take(if (large) 6000 else 3000)).append("\n\n")
             if (noText.isNotEmpty()) append("(Aus ${noText.joinToString { it.name }} konnte kein Text gelesen werden.)\n\n")
             lines.dropLast(1).forEach { append(it).append("\n") }
