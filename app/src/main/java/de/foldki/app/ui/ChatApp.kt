@@ -73,6 +73,9 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -177,7 +180,6 @@ fun ChatApp(vm: ChatViewModel) {
         val wide = maxWidth >= 600.dp // Fold7 unfolded / tablets: two panes with a draggable divider
         if (wide) {
             // Mock-up 18: chat list left, chat right. The ⚙ in the model card at the bottom opens the menu (mock-up 2).
-            var wideMenu by rememberSaveable { mutableStateOf(false) }
             val openPage: (String) -> Unit = { p -> split.expandFirst(); page = p }
             val paneScope = rememberCoroutineScope()
             val sidebarClosed by remember { derivedStateOf { split.collapse == PaneCollapse.FIRST } }
@@ -188,9 +190,8 @@ fun ChatApp(vm: ChatViewModel) {
                 first = {
                     Surface(color = FK.Surface, modifier = Modifier.fillMaxSize()) {
                         when {
-                            showSettings -> SettingsScreen(vm, ui, startPage = page!!.ifEmpty { null }, onBack = { page = null }, onMenu = { page = null; wideMenu = true })
-                            wideMenu -> MenuPanel(ui, vm, onPage = { wideMenu = false; openPage(it) }, onPicked = { wideMenu = false }, onClose = { wideMenu = false })
-                            else -> ChatListPane(ui, vm, onMenu = { wideMenu = true }, onCollapse = { split.toggleFirst(paneScope) })
+                            showSettings -> SettingsScreen(vm, ui, startPage = page!!.ifEmpty { null }, onBack = { page = null }, onMenu = { page = null })
+                            else -> MenuPanel(ui, vm, onPage = { openPage(it) }, onPicked = {}, onCollapse = { split.toggleFirst(paneScope) })
                         }
                     }
                 },
@@ -208,10 +209,10 @@ fun ChatApp(vm: ChatViewModel) {
                 scrimColor = androidx.compose.ui.graphics.Color(0x8C000000),
                 drawerContent = {
                     ModalDrawerSheet(
-                        drawerContainerColor = androidx.compose.ui.graphics.Color(0xEB1C1C1E), drawerShape = androidx.compose.ui.graphics.RectangleShape,
+                        drawerContainerColor = FK.Side, drawerShape = androidx.compose.ui.graphics.RectangleShape,
                         modifier = Modifier.width(width), windowInsets = WindowInsets(0, 0, 0, 0),
                     ) {
-                        MenuPanel(ui, vm, onPage = { page = it }, onPicked = { scope.launch { drawer.close() } }, onClose = null)
+                        MenuPanel(ui, vm, onPage = { page = it }, onPicked = { scope.launch { drawer.close() } }, onCollapse = null)
                     }
                 },
             ) {
@@ -271,85 +272,74 @@ private fun dayGroup(t: Long): String {
     }
 }
 
-/** Menu exactly like mock-up 2 (design/2-menue.png). */
+/**
+ * Seitenleiste ab 4.9 (Entwurf „neue Menü-Ordnung“): nur Chats – Neuer Chat, Suche, Filter Alle/Gemerkt, Chats nach Tagen.
+ * Unten zwei Einträge: Modelle und Einstellungen; alles andere steht geordnet in den Einstellungen.
+ * Zugeklappt in der Schublade, aufgeklappt als linke Spalte ([onCollapse] = Knopf zum Einklappen).
+ */
 @Composable
-private fun MenuPanel(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, onPicked: () -> Unit, onClose: (() -> Unit)?) {
+private fun MenuPanel(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, onPicked: () -> Unit, onCollapse: (() -> Unit)?) {
     var query by rememberSaveable { mutableStateOf("") }
+    var savedTab by rememberSaveable { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf<Conversation?>(null) }
     val go: (String) -> Unit = { onPage(it); onPicked() }
     confirmDelete?.let { c -> DeleteChatDialog(c, onDelete = { vm.delete(c.id); confirmDelete = null }, onDismiss = { confirmDelete = null }) }
-    Column(Modifier.fillMaxHeight().statusBarsPadding().navigationBarsPadding()) {
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 6.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                AppLogo(34.dp)
-                Spacer(Modifier.width(10.dp))
-                Text("Fold KI", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f))
-                if (onClose != null) NavBtn(Icons.Default.Close, "Menü schließen", onClick = onClose)
+    Column(Modifier.fillMaxHeight().background(FK.Side).statusBarsPadding().navigationBarsPadding()) {
+        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 6.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            AppLogo(30.dp)
+            Spacer(Modifier.width(10.dp))
+            Text("Fold KI", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f))
+            Row(
+                Modifier.height(36.dp).clip(RoundedCornerShape(18.dp)).background(FK.Accent).clickable { vm.newChat(); onPicked() }.padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Add, null, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Neuer Chat", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = androidx.compose.ui.graphics.Color.White)
             }
-            Text(
-                "＋ Neuer Chat", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, textAlign = TextAlign.Center,
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                    .background(androidx.compose.ui.graphics.Color.White).clickable { vm.newChat(); onPicked() }.padding(11.dp),
-            )
-            MenuSearch(query, { query = it }, Modifier.padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 10.dp))
-            if (query.isNotBlank()) {
-                val q = query.trim().lowercase()
-                ui.conversations.filter { c -> c.title.lowercase().contains(q) || c.messages.any { it.text.lowercase().contains(q) } }.take(50).forEach { c ->
-                    ChatListItem(c, selected = c.id == ui.currentId, onLong = { confirmDelete = c }) { vm.open(c.id); onPicked() }
+            if (onCollapse != null) {
+                Spacer(Modifier.width(8.dp))
+                NavBtn(Icons.AutoMirrored.Filled.MenuOpen, "Seitenleiste einklappen", bg = FK.Surface2, onClick = onCollapse)
+            }
+        }
+        MenuSearch(query, { query = it }, Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp))
+        Segmented(listOf("Alle", "Gemerkt"), if (savedTab) 1 else 0, Modifier.padding(start = 12.dp, end = 12.dp, bottom = 6.dp)) { savedTab = it == 1 }
+        val q = query.trim().lowercase()
+        LazyColumn(Modifier.weight(1f)) {
+            if (savedTab) {
+                val list = ui.saved.filter { q.isEmpty() || it.text.lowercase().contains(q) }
+                if (list.isEmpty()) item { Note("Noch nichts gemerkt. Unter einer Antwort auf ☆ tippen.", Modifier.padding(18.dp)) }
+                items(list, key = { "s_" + it.id }) { a ->
+                    Column(
+                        Modifier.padding(horizontal = 8.dp).fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { go("saved") }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    ) {
+                        Text(a.text.replace("\n", " ").take(120), fontSize = 15.sp, color = FK.Text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        if (a.chat.isNotBlank()) Text(a.chat, fontSize = 12.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             } else {
-                MenuHead("Chats")
-                MenuItem(Icons.Default.ChatBubbleOutline, FK.T2, "Verlauf") { go("history") }
-                MenuItem(Icons.Default.StarBorder, FK.T1, "Gemerkte Antworten") { go("saved") }
-                MenuItem(Icons.Default.Person, FK.T4, "Meine Anweisungen") { go("instructions") }
-                MenuHead("KI")
-                MenuItem(Icons.Default.Memory, FK.T3, "Modelle", count = ui.localModels.size) { go("models") }
-                MenuItem(Icons.Default.Language, FK.T7, "Erkunden") { go("hf") }
-                MenuItem(Icons.AutoMirrored.Filled.VolumeUp, FK.Danger to androidx.compose.ui.graphics.Color.White, "Stimmen") { go("voice") }
-                MenuItem(Icons.Default.Dns, FK.T6, "PC-Server") { go("server") }
-                MenuItem(Icons.Default.Build, FK.T8, "Werkzeuge") { go("tools") }
-                MenuHead("App")
-                MenuItem(Icons.Default.CloudDone, FK.T2, "S3-Sicherung") { go("s3") }
-                MenuItem(Icons.Default.Settings, FK.T10, "Einstellungen") { go("") }
+                val shown = ui.conversations.filter { c -> q.isEmpty() || c.title.lowercase().contains(q) || c.messages.any { it.text.lowercase().contains(q) } }
+                if (shown.isEmpty()) item { Note(if (q.isEmpty()) "Noch keine Chats." else "Nichts gefunden.", Modifier.padding(18.dp)) }
+                var last = ""
+                shown.forEach { c ->
+                    val g = dayGroup(c.updatedAt)
+                    if (g != last) { last = g; item(key = "h_$g") { MenuHead(g) } }
+                    item(key = c.id) { ChatListItem(c, selected = c.id == ui.currentId, onLong = { confirmDelete = c }) { vm.open(c.id); onPicked() } }
+                }
             }
         }
-        ModelFoot(ui, trailing = "⇅", modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 30.dp)) { go("models") }
+        Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 14.dp).clip(RoundedCornerShape(14.dp)).background(FK.Surface)) {
+            SettingRow("Modelle", null, leading = { Tile(Icons.Default.Memory, FK.T3) }, onClick = { go("models") }) {
+                StatusDot(ui.backend.isNotBlank() || (ui.usesNano && ui.nanoReady))
+                Spacer(Modifier.width(6.dp))
+                Text(ui.activeName, fontSize = 14.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 150.dp))
+                Chevron()
+            }
+            GroupDivider()
+            SettingRow("Einstellungen", null, leading = { Tile(Icons.Default.Settings, FK.T10) }, onClick = { go("") })
+        }
     }
-}
-
-/** Chat list of the unfolded screen exactly like mock-up 18 (left pane). */
-@Composable
-private fun ChatListPane(ui: UiState, vm: ChatViewModel, onMenu: () -> Unit, onCollapse: () -> Unit) {
-    var query by rememberSaveable { mutableStateOf("") }
-    var confirmDelete by remember { mutableStateOf<Conversation?>(null) }
-    Column(Modifier.fillMaxHeight().background(FK.Surface).statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            AppLogo(32.dp)
-            Spacer(Modifier.width(10.dp))
-            Text("Fold KI", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f))
-            Box(Modifier.size(36.dp).clip(CircleShape).background(FK.Surface).clickable(onClick = onCollapse), contentAlignment = Alignment.Center) {
-                Text("◧", fontSize = 18.sp, color = FK.Text)
-            }
-        }
-        Text(
-            "＋ Neuer Chat", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, textAlign = TextAlign.Center,
-            modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                .background(androidx.compose.ui.graphics.Color.White).clickable { vm.newChat() }.padding(10.dp),
-        )
-        MenuSearch(query, { query = it }, Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp))
-        val q = query.trim().lowercase()
-        val shown = ui.conversations.filter { c -> q.isEmpty() || c.title.lowercase().contains(q) || c.messages.any { it.text.lowercase().contains(q) } }
-        LazyColumn(Modifier.weight(1f)) {
-            var last = ""
-            shown.forEach { c ->
-                val g = dayGroup(c.updatedAt)
-                if (g != last) { last = g; item(key = "h_$g") { MenuHead(g) } }
-                item(key = c.id) { ChatListItem(c, selected = c.id == ui.currentId, onLong = { confirmDelete = c }) { vm.open(c.id) } }
-            }
-        }
-        ModelFoot(ui, trailing = "⚙︎", modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 20.dp), onClick = onMenu)
-    }
-    confirmDelete?.let { c -> DeleteChatDialog(c, onDelete = { vm.delete(c.id); confirmDelete = null }, onDismiss = { confirmDelete = null }) }
 }
 
 /** "Chat löschen?" – the same everywhere (chat list, menu search, Verlauf). */
@@ -415,14 +405,14 @@ private fun ModelFoot(ui: UiState, trailing: String, modifier: Modifier, onClick
 @Composable
 private fun MenuSearch(value: String, onChange: (String) -> Unit, modifier: Modifier) {
     Row(modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(FK.Surface2).padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("🔍", fontSize = 14.sp)
+        Icon(Icons.Default.Search, null, tint = FK.Dim, modifier = Modifier.size(17.dp))
         Spacer(Modifier.width(8.dp))
         Box(Modifier.weight(1f)) {
             if (value.isEmpty()) Text("Chats durchsuchen", color = FK.Dim, fontSize = 15.sp)
             BasicTextField(value, onChange, singleLine = true, textStyle = TextStyle(fontFamily = Inter, fontSize = 15.sp, color = FK.Text),
                 cursorBrush = SolidColor(FK.Accent), modifier = Modifier.fillMaxWidth())
         }
-        if (value.isNotEmpty()) Text("✕", color = FK.Dim, fontSize = 14.sp, modifier = Modifier.clickable { onChange("") })
+        if (value.isNotEmpty()) Icon(Icons.Default.Close, "Leeren", tint = FK.Dim, modifier = Modifier.size(17.dp).clickable { onChange("") })
     }
 }
 
@@ -475,16 +465,17 @@ private fun TopBar(ui: UiState, showMenu: Boolean, onMenu: () -> Unit, sidebar: 
             Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable(onClick = onModel).padding(vertical = 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text(modelName(ui) + " ⌄", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(modelName(ui) + " ˅", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (ui.incognito) Text("🕶 Inkognito", fontSize = 12.sp, color = FK.Muted)
                 else {
-                    Box(Modifier.size(7.dp).clip(CircleShape).background(if (modelReady(ui)) FK.Ok else FK.Dim))
-                    Spacer(Modifier.width(4.dp))
+                    // Ab 4.9: green only when the model is really loaded; "nicht geladen" = it loads with the next question.
+                    val loaded = ui.backend.isNotBlank() || (ui.usesNano && ui.nanoReady) || (ui.activeServer != null && modelReady(ui))
+                    if (loaded) { Box(Modifier.size(7.dp).clip(CircleShape).background(FK.Ok)); Spacer(Modifier.width(4.dp)) }
                     Text(
-                        listOf(
-                            when { ui.usesNano -> "AICore"; ui.activeServer != null -> "PC"; else -> ui.backend.ifBlank { "nicht geladen" } },
-                            if (ui.webSearch) "Web" else if (ui.activeServer != null) "WLAN" else "offline",
+                        listOfNotNull(
+                            when { ui.usesNano -> "AICore"; ui.activeServer != null -> "PC-Server"; else -> ui.backend.ifBlank { if (ui.activeModel.isBlank()) "kein Modell" else "lädt bei der nächsten Frage" } },
+                            if (ui.webSearch) "Web" else null,
                         ).joinToString(" · "),
                         fontSize = 12.sp, color = FK.Muted,
                     )
@@ -676,13 +667,7 @@ private fun StartScreen(ui: UiState, vm: ChatViewModel, onSettings: () -> Unit, 
                 TextButton(onClick = onSettings) { Text("Modell wählen oder herunterladen", color = FK.Accent) }
             }
         }
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            StartChip("📄 Brief beantworten", "PDF oder Foto anhängen") { onCard(P_REPLY, true) }
-            StartChip("✍️ Text verbessern", "kürzer, klarer, höflicher") { onCard(P_IMPROVE, false) }
-        }
+        // Ab 4.9 without the two big cards (the user wants a calm start screen); letters and texts are simply asked in the chat.
     }
 }
 
@@ -746,7 +731,7 @@ private fun ChatScreen(
         afterMicGranted = null
     }
     val withMic: (() -> Unit) -> Unit = { action ->
-        if (!voice.isReady) { vm.notify("Bitte zuerst unter Einstellungen die Sprachfunktion einrichten (Tessa & Caleb)."); onSettings() }
+        if (!voice.canListen) { vm.notify("Bitte zuerst unter Einstellungen → Stimme & Sprache das Diktieren einrichten."); onVoiceSettings() }
         else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) action()
         else { afterMicGranted = action; micPermission.launch(Manifest.permission.RECORD_AUDIO) }
     }
@@ -766,7 +751,7 @@ private fun ChatScreen(
         sharePdf = { text -> vm.openPreview(text) },
         speak = { id, text ->
             if (speakingId == id) { voice.stopSpeaking(); speakingId = null }
-            else if (!voice.supertonic.isReady) { vm.notify("Bitte zuerst unter Einstellungen die Sprachfunktion einrichten (Tessa & Caleb)."); onSettings() }
+            else if (!voice.canSpeak) { vm.notify("Bitte zuerst unter Einstellungen → Stimme & Sprache die Stimme einrichten."); onVoiceSettings() }
             else { speakingId = id; voice.speak(text) { if (speakingId == id) speakingId = null } }
         },
         speakingId = speakingId,
@@ -955,15 +940,24 @@ private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions,
             m.attachments.forEach { a -> DocCard(a, actions) }
             if (showStats && !typing && (m.tokens > 0 || m.answerMs > 0)) AnswerStats(m)
             if (!typing && !m.isError && m.text.isNotBlank()) {
-                Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    TextAction("⧉ Kopieren") { actions.copy(clean) }
-                    TextAction(if (actions.speakingId == m.id) "■ Stopp" else "🔊 Vorlesen") { actions.speak(m.id, DocumentParser.spoken(m.text)) }
-                    TextAction("☆ Merken") { actions.save(m) }
-                    TextAction("↻") { actions.retry(m) }
+                Row(Modifier.padding(top = 4.dp).offset(x = (-8).dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    IconAction(Icons.Default.ContentCopy, "Kopieren") { actions.copy(clean) }
+                    IconAction(if (actions.speakingId == m.id) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
+                        if (actions.speakingId == m.id) "Vorlesen stoppen" else "Vorlesen") { actions.speak(m.id, DocumentParser.spoken(m.text)) }
+                    IconAction(Icons.Default.StarBorder, "Merken") { actions.save(m) }
+                    IconAction(Icons.Default.Refresh, "Neu schreiben") { actions.retry(m) }
                 }
                 if (m.cut) TextAction("➜ Weiterschreiben") { actions.more() }
             }
         }
+    }
+}
+
+/** Small grey symbol under an answer (copy, read aloud, save, write again). */
+@Composable
+private fun IconAction(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Box(Modifier.size(36.dp).clip(CircleShape).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Icon(icon, label, tint = FK.Muted, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -978,6 +972,7 @@ private fun AnswerStats(m: ChatMessage) {
     val de = java.util.Locale.GERMANY
     val parts = buildList {
         if (m.backend.isNotBlank()) add(m.backend)
+        if (m.firstMs > 0) add("erstes Wort %.1f s".format(de, m.firstMs / 1000.0))
         if (m.tokens > 0) add("%,d Tokens".format(de, m.tokens))
         if (m.answerMs > 0) add("%.1f s".format(de, m.answerMs / 1000.0))
         if (m.tokPerSec > 0f) add("%.0f Tokens/s".format(de, m.tokPerSec))
@@ -993,11 +988,11 @@ private fun Thoughts(text: String, thinking: Boolean, liveCpu: Int, thinkMs: Lon
     Column(Modifier.padding(bottom = 12.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(FK.Surface).clickable { open = !open }.padding(horizontal = 12.dp, vertical = 9.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                if (thinking) "💭 Denkt nach …" + if (liveCpu >= 0) " · CPU $liveCpu %" else ""
-                else "💭 Gedanken" + if (thinkMs > 0) " · " + "%.0f s".format(de, thinkMs / 1000.0) else "",
+                if (thinking) "Denkt nach …" + if (liveCpu >= 0) " · CPU $liveCpu %" else ""
+                else "Gedanken" + if (thinkMs > 0) " · " + "%.0f s".format(de, thinkMs / 1000.0) else "",
                 fontSize = 13.sp, color = FK.Muted, modifier = Modifier.weight(1f),
             )
-            Text(if (open) "⌃" else "⌄", fontSize = 13.sp, color = FK.Muted)
+            Icon(if (open) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null, tint = FK.Muted, modifier = Modifier.size(18.dp))
         }
         if (open) SelectionContainer { Text(text, fontSize = 13.sp, lineHeight = 19.sp, color = FK.Muted, modifier = Modifier.padding(top = 8.dp)) }
     }
@@ -1089,7 +1084,8 @@ private fun InputBar(
                 onDictate()
                 dictating = true
                 voice.listen(
-                    onFinal = { t -> if (t.isNotBlank()) setText((before + " " + t).trim()) },
+                    onPartial = { t -> setText((before + " " + t).trim()) },
+                    onFinal = { t -> setText((before + " " + t).trim()) },
                     onError = { msg -> vm.notify(msg) },
                     onEnd = { dictating = false },
                 )
