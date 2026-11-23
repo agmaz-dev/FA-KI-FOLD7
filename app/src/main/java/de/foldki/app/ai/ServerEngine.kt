@@ -6,6 +6,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -119,8 +120,12 @@ object ServerEngine {
         while (next != null && step < maxSteps) {
             step++
             val sb = StringBuilder()
-            chat(s, system, earlier.toList(), next, 0.3, 0).collect { sb.append(it) }
-            val answer = ThinkParser.answerOnly(sb.toString(), false)
+            // Ab 4.9: stop as soon as the tool call is complete; an invented result after it is never kept.
+            chat(s, system, earlier.toList(), next, 0.3, 0).takeWhile { piece ->
+                sb.append(piece)
+                !(sb.contains('}') && GemmaGitHubAgent.callEnd(ThinkParser.answerOnly(sb.toString(), false)) > 0)
+            }.collect { }
+            val answer = GemmaGitHubAgent.cutAtCall(ThinkParser.answerOnly(sb.toString(), false))
             de.foldki.app.data.DebugLog.write("PC-Server Werkzeug-Schritt $step: " + answer.replace("\n", "⏎").take(800))
             earlier += true to next
             earlier += false to answer

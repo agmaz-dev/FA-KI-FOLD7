@@ -29,7 +29,7 @@ class GemmaGitHubAgent(
         private const val RESULT_CHARS = 1500 // small models: keep each result short
 
         /** Instruction with the tool list; [github] = GitHub tools, [mcpTools] = tools of the own server. */
-        fun system(base: String, github: Boolean = true, mcpTools: List<McpClient.Tool> = emptyList(), mcpName: String = ""): String = buildString {
+        fun system(base: String, github: Boolean = true, mcpTools: List<McpClient.Tool> = emptyList(), mcpName: String = "", question: String = ""): String = buildString {
             if (base.isNotBlank()) append(base.trim().take(2400)).append("\n\n")
             append(
                 """
@@ -44,12 +44,13 @@ class GemmaGitHubAgent(
             )
             if (github) {
                 append("\n\nGitHub-Werkzeuge (Konto des Nutzers):")
-                GitHubTools.SPECS.forEach { s ->
+                val names = relevantTools(question)
+                GitHubTools.SPECS.filter { it.name in names }.forEach { s ->
                     append("\n- ").append(s.name)
                     if (s.params.isNotEmpty()) append(" (").append(s.params.joinToString(", ") { p -> p.name + if (p.required) "" else "?" }).append(")")
                     append(": ").append(s.description.take(110))
                 }
-                append("\nwrite_files: \"files\" ist eine Liste von {\"path\":…, \"content\":…}.")
+                if ("write_files" in names) append("\nwrite_files: \"files\" ist eine Liste von {\"path\":…, \"content\":…}.")
             }
             if (mcpTools.isNotEmpty()) {
                 append("\n\nWerkzeuge vom eigenen Server").append(if (mcpName.isBlank()) "" else " „$mcpName“").append(" (Angaben direkt neben \"name\"):")
@@ -63,8 +64,15 @@ class GemmaGitHubAgent(
 
         /** The JSON after "WERKZEUG:" (first '{' to its matching '}'), or null. */
         fun parseCall(text: String): JSONObject? {
-            val at = text.indexOf("WERKZEUG:").takeIf { it >= 0 } ?: return null
-            val start = text.indexOf('{', at).takeIf { it >= 0 } ?: return null
+            val end = callEnd(text).takeIf { it > 0 } ?: return null
+            val start = text.indexOf('{', text.indexOf("WERKZEUG:"))
+            return runCatching { JSONObject(text.substring(start, end)) }.getOrNull()
+        }
+
+        /** Index right after the closing '}' of the first complete WERKZEUG call, or -1 (no complete call yet). */
+        fun callEnd(text: String): Int {
+            val at = text.indexOf("WERKZEUG:").takeIf { it >= 0 } ?: return -1
+            val start = text.indexOf('{', at).takeIf { it >= 0 } ?: return -1
             var depth = 0; var inStr = false; var esc = false
             for (i in start until text.length) {
                 val c = text[i]
@@ -72,11 +80,43 @@ class GemmaGitHubAgent(
                 when (c) {
                     '"' -> inStr = true
                     '{' -> depth++
-                    '}' -> { depth--; if (depth == 0) return runCatching { JSONObject(text.substring(start, i + 1)) }.getOrNull() }
+                    '}' -> { depth--; if (depth == 0) return i + 1 }
                 }
             }
-            return null
+            return -1
         }
+
+        /**
+         * The model's turn as it is kept in the conversation: everything after the tool call is cut off. Small models
+         * often go on and write an invented "ERGEBNIS" themselves – that text must never stay in the chat history.
+         */
+        fun cutAtCall(answer: String): String { val e = callEnd(answer); return if (e > 0) answer.substring(0, e) else answer }
+
+        private val CORE = setOf("whoami", "list_my_repositories", "get_repository", "list_directory", "read_file", "search_repositories", "list_branches", "list_commits")
+        private val BUILD = setOf("list_workflows", "list_workflow_runs", "get_run_jobs", "get_job_log", "list_releases", "wait", "run_workflow", "rerun_workflow")
+        private val ISSUES = setOf("search_issues", "list_issues", "list_pull_requests", "get_pull_request", "create_pull_request", "merge_pull_request", "create_issue", "comment")
+        private val WRITE = setOf("create_repository", "fork_repository", "create_branch", "write_files")
+
+        /**
+         * Only the tools the question needs (ab 4.9): a long tool list makes small models slow and confused.
+         * Short follow-ups ("ja, mach") get all tools.
+         */
+        fun relevantTools(question: String): Set<String> {
+            val q = question.lowercase()
+            val out = HashSet(CORE)
+            var hit = false
+            if (Regex("build|apk|workflow|action|release|fehler|log|läuft|lauf|bau|kompil|status").containsMatchIn(q)) { out += BUILD; hit = true }
+            if (Regex("issue|pull|\\bpr\\b|merge|kommentar|zusammenführ").containsMatchIn(q)) { out += ISSUES; hit = true }
+            if (Regex("such|find|code|funktion|klasse").containsMatchIn(q)) { out += "search_code"; hit = true }
+            if (Regex("änder|aender|schreib|commit|anleg|erstell|neu|fork|branch|datei|lösch|füg|ersetz|korrigier|repar|fix|update").containsMatchIn(q)) { out += WRITE; hit = true }
+            if (!hit && q.length < 40) return GitHubTools.SPECS.map { it.name }.toSet()
+            return out
+        }
+
+        /** Placeholders a model writes instead of real data ("[Repo-Name]", "[Ihr Name]"). */
+        private val PLACEHOLDER = Regex("\\[[^\\]\\n]{2,40}\\]")
+        /** Questions that need real data from a tool. */
+        private val NEEDS_DATA = Regex("zeig|liste|welche|was ist|wie viele|status|build|lies|öffne|repo|datei|commit|branch|release|issue|pull|letzte|neueste|such|find|prüf|check|wer bin|konto", RegexOption.IGNORE_CASE)
     }
 
     suspend fun run(
@@ -85,12 +125,36 @@ class GemmaGitHubAgent(
         onText: suspend (String) -> Unit,
         approve: suspend (title: String, details: String) -> Boolean,
     ) {
-        val steps = session(system(baseSystem, tools != null, mcpTools, mcpName), question, MAX_STEPS) { answer ->
+        var used = 0
+        var forced = false
+        val seen = HashMap<String, Int>()
+        var stop = false
+        val steps = session(system(baseSystem, tools != null, mcpTools, mcpName, question), question, MAX_STEPS) { answer ->
+            if (stop) return@session null
             val call = parseCall(answer)
             val before = (if (call != null) answer.substringBefore("WERKZEUG:") else answer).trim()
+            // Force a tool once: the model answered without one although the question needs real data (or wrote placeholders).
+            if (call == null && used == 0 && !forced && (PLACEHOLDER.containsMatchIn(answer) || NEEDS_DATA.containsMatchIn(question))) {
+                forced = true
+                de.foldki.app.data.DebugLog.write("Werkzeug erzwungen: Modell antwortete ohne Werkzeug")
+                return@session "Du hast kein Werkzeug benutzt und darfst keine Daten erfinden. Benutze jetzt das passende Werkzeug: " +
+                    "schreibe nur eine Zeile WERKZEUG: {\"name\":…} und hör dann auf."
+            }
             if (before.isNotBlank()) onText(before + "\n\n")
             if (call == null) return@session null
             val name = call.optString("name")
+            // Loop guard: the same call again and again.
+            val key = call.toString()
+            val n = (seen[key] ?: 0) + 1
+            seen[key] = n
+            if (n >= 3) {
+                de.foldki.app.data.DebugLog.write("Werkzeug-Schleife angehalten: $name")
+                onText("(Angehalten: dasselbe Werkzeug wurde dreimal gleich aufgerufen.)\n")
+                stop = true
+                return@session null
+            }
+            if (n == 2) return@session "ERGEBNIS:\nDiesen Aufruf hast du schon gemacht – das Ergebnis steht weiter oben. Antworte jetzt mit diesem Ergebnis, ohne Werkzeug."
+            used++
             val result = try {
                 when {
                     name.isBlank() -> "Fehler: \"name\" fehlt."
@@ -121,7 +185,10 @@ class GemmaGitHubAgent(
             } catch (e: Throwable) {
                 "Fehler: ${e.message ?: e.javaClass.simpleName}"
             }
-            "ERGEBNIS:\n" + GitHubTools.cap(result, RESULT_CHARS)
+            // The real result goes into the error report, so it is visible what the model got.
+            de.foldki.app.data.DebugLog.write("Werkzeug $name → " + result.replace("\n", "⏎").take(700))
+            "ERGEBNIS (echte Daten von der App):\n" + GitHubTools.cap(result, RESULT_CHARS) +
+                "\n\nNutze nur diese Daten. Nächstes Werkzeug oder fertige Antwort auf Deutsch."
         }
         if (steps >= MAX_STEPS) onText("\n(Nach $MAX_STEPS Schritten angehalten – sag „weiter“, dann mache ich weiter.)")
     }

@@ -85,8 +85,8 @@ object DebugLog {
         append(" · erstes Wort: ").append(firstTokenMs?.let { "${it} ms" } ?: "-")
         append(" · gesamt: ").append(totalMs).append(" ms\n")
         append("  Anweisung (").append(system.length).append(" Zeichen): ").append(system.take(1500).replace("\n", " ⏎ ")).append("\n")
-        append("  Frage: ").append(question.take(1000).replace("\n", " ⏎ ")).append("\n")
-        append("  Antwort: ").append(answer.take(1500).replace("\n", " ⏎ "))
+        append("  Frage: ").append(question.take(4000).replace("\n", " ⏎ ")).append("\n")
+        append("  Antwort: ").append(answer.take(12000).replace("\n", " ⏎ "))
         if (error != null) append("\n  FEHLER: ").append(error)
     })
 
