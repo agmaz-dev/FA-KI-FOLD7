@@ -1,14 +1,15 @@
 # Hinweise für Claude
 
-## Stimmen (gilt für alle Apps und Programme dieses Nutzers)
-- Sprachausgabe immer mit **Supertonic 3** und genau **zwei Stimmen: Tessa (weiblich, Stil `F5`) und Caleb (männlich, Stil `M2`)**. Keine weiteren Stimmen (z. B. nicht Elena).
-- Modell: `https://huggingface.co/supertone-oss-archive/supertonic-3`, Revision `aafc6e32416a594460b32413efc49d7fe4ce6d46`, einmaliger Download (~250 MB), läuft offline per ONNX Runtime.
-- Referenz-Umsetzungen: `agmaz-dev/FA-KI-Desktop` → `lib/supertonic.js` (Node/Electron), `agmaz-dev/FA-KI-FOLD7` → `app/src/main/java/de/foldki/app/voice/Supertonic.kt` (Android/Kotlin).
-- Standardstimme: Tessa. **Keine Ausweichstimmen** (keine Android-/Windows-/System-Stimmen, auch nicht als Fallback). Ist Supertonic noch nicht eingerichtet, wird der Nutzer zur Einrichtung geschickt.
+## Stimmen (gilt für alle Apps und Programme dieses Nutzers, ab 4.9)
+- Sprachausgabe mit **Phonon** (gradium/phonon-40m-multilingual, q8, ca. 75 MB, CC BY-NC 4.0), Standardstimme **Anton** – dieselbe Stimme wie in FA KI Desktop (Zweig feature/agent-erkunden, `lib/phonon.js`). Weitere deutsche Stimmen aus gradium/phonon-voices (Nele, Mats, Henrik, Leon, Jette, Annika, Lotta).
+- Android: `voice/Phonon.kt` ruft `libptts_ffi.so` (gradium-ai/xn-ptts v0.7.1) über JNA auf (`net.java.dev.jna:jna:5.17.0@aar`). Die Bibliothek baut `phonon/build-phonon.sh` nur in GitHub Actions (Rust + NDK des Runners, Gradle-Task `buildPhononLibs`, Ordner `app/phonon-libs`, nicht im Repo). Klappt der Bau nicht, entsteht die APK ohne Phonon – dann liest Supertonic (alter Ersatz) vor.
+- Das Modell ist auf Hugging Face geschützt: Nutzer akzeptiert die Bedingungen und trägt seinen Hugging-Face-Token unter Stimme & Sprache ein (`Settings.hfToken`, bleibt auf dem Handy). Download einmalig nach `filesDir/phonon/model` (+ `voices/<name>.safetensors`).
+- Supertonic (Tessa/Caleb) ist nur noch Ersatz, solange Phonon in der APK fehlt.
 
-## Spracheingabe
-- Wie bei ChatGPT/Grok: **eigene Mikrofonaufnahme + Whisper auf dem Gerät**, keine System-Spracherkennung (kein Android-SpeechRecognizer, kein Google-Sprachfenster).
-- Android: `Xenova/whisper-small` (int8, ONNX Runtime) → `app/src/main/java/de/foldki/app/voice/WhisperStt.kt` in FA-KI-FOLD7. Desktop: whisper.cpp (`lib/speech.js` in FA-KI-Desktop).
+## Spracheingabe (ab 4.9)
+- **Live-Diktat** mit ML Kit GenAI Speech Recognition (`voice/LiveStt.kt`, `com.google.mlkit:genai-speech-recognition:1.0.0-alpha1`, Deutsch, MODE_BASIC): die App nimmt selbst auf und gibt den Ton über eine Pipe weiter – Wörter erscheinen beim Sprechen, kein Google-Fenster, kein Banner, kein Klick. Ende nach kurzer Pause.
+- Ist Live-Diktat nicht verfügbar oder aus: eigene Aufnahme + Whisper wie bisher (`voice/WhisperStt.kt`, `Xenova/whisper-small`). Keine System-Spracherkennung mit Google-Fenster.
+- **Anruf-Modus** (`ui/VoiceOverlay.kt`): zuhören → antworten → vorlesen; jeder fertige Satz wird schon gesprochen, während das Modell noch schreibt (`VoiceController.enqueue`). Antworten kurz (1–3 Sätze), ohne Denken. Tippen auf den Kreis unterbricht.
 
 ## Zielgerät
 - Zielgerät: Samsung Galaxy Z Fold 7. Jede Layout-Änderung und jeder Test gilt für beide Zustände: zugeklappt (schmales Außendisplay) und aufgeklappt (großes Display). Eingabefelder, Knöpfe und Abstände müssen auf dem Außendisplay funktionieren.
@@ -18,8 +19,8 @@
 
 ## Design (ab 3.0)
 - Claude wird in der Oberfläche nicht mehr angeboten. Modellwahl (ab 3.2): alle heruntergeladenen `.litertlm`-Modelle + Gemini Nano.
-- Immer das dunkle Fold-KI-Design (ab 4.0 Apple-Stil: Schwarz, graue Gruppen, Blau als Akzent, grüne Schalter, farbige Symbol-Kacheln mit weißem Symbol, große Seitentitel): Farben/Bausteine in `ui/Theme.kt` (`FK`) und `ui/Design.kt` (Tile, Group, SettingRow, Tag, Pill, LargeTitle, Segmented, Card, FkToggle, FkChip, FkButton), Schrift Inter (`res/font`). Neue Bildschirme nur mit diesen Bausteinen bauen, damit alles gleich aussieht. Entwürfe: 18 Bilder (Chat, Menü, Modelle, Stimmen, Anweisungen, PC-Server, Werkzeuge, S3, Erkunden, Chat-Optionen, PDF, Sprachmodus, Einstellungen, Verlauf, Tagesstart, aufgeklappt).
-- **Menü (ab 4.0):** Seitenleiste = Neuer Chat, Suche, Verlauf, Gemerkte Antworten, Meine Anweisungen, Modelle, Erkunden, Stimmen, Werkzeuge, Einstellungen, letzte Chats, unten das aktive Modell. Seiten öffnen über `SettingsScreen(startPage = …)`. Chat-Optionen (⋮): Inkognito (`Conversation.incognito`, nie gespeichert), Anweisung pro Chat (`Conversation.instruction`, nur selbst geschriebene `Settings.instructions`), Websuche, Kreativität (`Creativity`, Standard = kein Sampler), Länge (`AnswerLength`, Frei = keine Grenze), Gedanken/Statistik ein/aus. Gemerkte Antworten: `SavedStore` (saved.json).
+- Immer das dunkle Fold-KI-Design (ab 4.0 Apple-Stil: Schwarz, graue Gruppen, Blau als Akzent, grüne Schalter, große Seitentitel; ab 4.9 alle Symbol-Kacheln einheitlich grau mit hellem Symbol – Blau nur für Aktives, keine Emojis als Symbole, kein zusätzlicher Buchstabenabstand): Farben/Bausteine in `ui/Theme.kt` (`FK`) und `ui/Design.kt` (Tile, Group, SettingRow, Tag, Pill, LargeTitle, Segmented, Card, FkToggle, FkChip, FkButton), Schrift Inter (`res/font`). Neue Bildschirme nur mit diesen Bausteinen bauen, damit alles gleich aussieht. Entwürfe: 18 Bilder (Chat, Menü, Modelle, Stimmen, Anweisungen, PC-Server, Werkzeuge, S3, Erkunden, Chat-Optionen, PDF, Sprachmodus, Einstellungen, Verlauf, Tagesstart, aufgeklappt).
+- **Menü (ab 4.9, Entwurf „Fold KI – neue Menü-Ordnung“):** Seitenleiste = nur Chats (Neuer Chat, Suche, Filter Alle/Gemerkt, Chats nach Tagen), unten „Modelle“ und „Einstellungen“. Einstellungen in sechs Gruppen: KI & Modelle, Verhalten, Sprache, Werkzeuge, Briefe, Daten & Hilfe. Erkunden ist ein Reiter in Modelle. Startbildschirm ohne Vorschlagskarten. Seiten öffnen über `SettingsScreen(startPage = …)`. Chat-Optionen (⋮): Inkognito (`Conversation.incognito`, nie gespeichert), Anweisung pro Chat (`Conversation.instruction`, nur selbst geschriebene `Settings.instructions`), Websuche, Kreativität (`Creativity`, Standard = kein Sampler), Länge (`AnswerLength`, Frei = keine Grenze), Gedanken/Statistik ein/aus. Gemerkte Antworten: `SavedStore` (saved.json).
 
 ## Logo (ab 4.4)
 - Überall das FA-KI-Logo aus FA KI Desktop (`src/logo.svg`, Zweig feature/agent-erkunden): App-Symbol (`mipmap-anydpi-v26/ic_launcher.xml`, Hintergrund `drawable/ic_launcher_background.xml`, Zeichen `drawable-nodpi/ic_launcher_fg.png`) und in der App `drawable-nodpi/logo_fa_ki.png` (`AppLogo` in Menü, Chatliste, Startbildschirm).
@@ -63,3 +64,13 @@
 - **Menü öffnen schließt die Tastatur** (`ChatApp`, `drawer.targetValue`).
 - **Oben „nicht geladen“** statt „GPU“, solange kein Modell geladen ist.
 - **MCP-Werkzeuge:** ein eigener Server über Streamable HTTP (`ai/McpClient.kt`: initialize, tools/list, tools/call; Seite `McpPage`, `Settings.mcp*`). Werkzeuge heißen für das Modell `mcp_<name>`; lesende (`readOnlyHint`) laufen sofort, alle anderen nur nach Freigabe. Aktiv bei „MCP“, „Werkzeug/Tool“ oder dem Servernamen in der Frage. stdio-Server gehen auf dem Handy nicht.
+
+## Ab 4.9 (Liste vom 23.11.2026)
+- **Rechner der App** (`ai/Calc.kt`): Rechenausdrücke der Frage werden vorher ausgerechnet und mitgegeben; Gleichungen in Antworten („3 × 12,50 € = …“) werden nachgerechnet und korrigiert. Tests: `CalcTest`.
+- **Werkzeuge** (`ai/GemmaGitHubAgent.kt`): Modell hört nach der WERKZEUG-Zeile auf, erfundene „ERGEBNIS“-Texte werden abgeschnitten (`cutAtCall`), nur echte Ergebnisse stehen im Verlauf und im Fehlerbericht; Werkzeug wird einmal erzwungen, wenn das Modell ohne Werkzeug Daten erfindet; Schleifenschutz (gleicher Aufruf dreimal = Stopp); nur die passenden Werkzeuge in der Liste (`relevantTools`). GitHub-Nachfragen („ja“, Diktierfehler wie „Reepost“) bleiben bei GitHub.
+- **Websuche**: nicht bei Begrüßungen, Briefen, Dateien, Werkzeug-Aufgaben; Suchwörter aus Frage + vorheriger Frage ohne Füllwörter; zusätzlich DuckDuckGo (Shops, Preise); „Quellen:“ unter der Antwort.
+- **PDF**: „so erstelle“, „mach daraus eine Datei“, „zum Drucken“ nach einem Brief öffnen die PDF-Vorschau; behauptet das Modell, eine PDF erstellt zu haben, macht die App sie wirklich. Platzhalter („[Ihr Name]“) werden mit dem aktiven Absenderprofil gefüllt.
+- **Einstellungen pro Modell** (`data/ModelParams.kt`, Modelle → Einstellungen): höchstens Tokens, Top-K, Top-P, Temperatur, Denken, Kontext (LiteRT). Qwen empfohlen: Top-K 20, Top-P 0,8, Temperatur 0,7, Denken aus. Briefe mit Temperatur höchstens 0,3.
+- Schleifenschutz in Antworten, Verlauf über 75 % wird gekürzt, Hitze-Pause erst ab „critical“, Speicher-Warnung vor dem Laden, Modell bleibt 2 Minuten im Hintergrund geladen, NPU-Leistung Sparsam/Ausgewogen/Maximal (`GGML_HEXAGON_POWER_MODE`), Fehlerbericht schneidet Antworten erst nach 12 000 Zeichen ab, „erstes Wort“ in der Statistik.
+- Hugging Face in der App: eine schmale Leiste (Zurück, eigene Adresszeile mit Kopieren/Einfügen, Schließen), unten „Modell erkannt · In App laden“. Erkunden zeigt nur Chat-Modelle.
+- Aufgeklappt: Trennwand mit breitem Griff, rastet bei 0, ⅓, Scharnier/½, ⅔, 1 ein, schneller Wisch schließt, Tippen auf den Griff einer geschlossenen Seite öffnet sie, Doppeltipp = Standard, Zurück-Geste am Griff ausgenommen.
