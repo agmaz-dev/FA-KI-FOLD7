@@ -93,7 +93,10 @@ fun SettingRow(
 }
 
 @Composable
-fun Chevron() = Text("›", fontSize = 18.sp, color = FK.Dim)
+fun Chevron() = Icon(
+    Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = FK.Dim,
+    modifier = Modifier.padding(start = 4.dp).size(20.dp),
+)
 
 /** Grey value on the right of a row ("leer", "GPU", "75 %"). */
 @Composable
@@ -222,7 +225,7 @@ fun SearchBox(value: String, onChange: (String) -> Unit, hint: String, modifier:
         modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(FK.Surface).padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("🔍", fontSize = 15.sp)
+        Icon(Icons.Default.Search, null, tint = FK.Dim, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(8.dp))
         Box(Modifier.weight(1f)) {
             if (value.isEmpty()) Text(hint, color = FK.Dim, fontSize = 16.sp, maxLines = 1)
@@ -237,22 +240,13 @@ fun SearchBox(value: String, onChange: (String) -> Unit, hint: String, modifier:
     }
 }
 
-/** Letter logo of a model maker (gradient tile, like the mock-up). */
+/** Letter logo of a model maker (ab 4.9: calm grey tile like all other symbols). */
 @Composable
 fun ModelLogo(vendor: String, size: Dp = 36.dp) {
-    val colors = when (vendor) {
-        "Google" -> listOf(Color(0xFF4285F4), Color(0xFF9B72CB))
-        "Alibaba" -> listOf(Color(0xFF615CED), Color(0xFF8B5CF6))
-        "DeepSeek" -> listOf(Color(0xFF0F766E), Color(0xFF14B8A6))
-        "Microsoft" -> listOf(Color(0xFFF97316), Color(0xFFFACC15))
-        "Meta" -> listOf(Color(0xFF0668E1), Color(0xFF00C6FF))
-        "Mistral" -> listOf(Color(0xFFFF7000), Color(0xFFFFB000))
-        else -> listOf(Color(0xFF636366), Color(0xFF8E8E93))
-    }
     Box(
-        Modifier.size(size).clip(RoundedCornerShape(size * 0.28f)).background(androidx.compose.ui.graphics.Brush.linearGradient(colors)),
+        Modifier.size(size).clip(RoundedCornerShape(size * 0.28f)).background(FK.Surface3),
         contentAlignment = Alignment.Center,
-    ) { Text(vendor.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.42f).sp) }
+    ) { Text(vendor.take(1).uppercase(), color = FK.Text, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.42f).sp) }
 }
 
 /** Card with rounded corners (models, memory). [border] e.g. green for the active model. */

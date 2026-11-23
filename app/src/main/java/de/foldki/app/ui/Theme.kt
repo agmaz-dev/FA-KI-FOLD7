@@ -33,18 +33,21 @@ object FK {
     val Side = Color(0xFF1C1C1E)
     val Scrim = Color(0x99000000)
 
-    // Icon tiles (background, symbol): solid colour with a white symbol, like iOS settings.
-    val T1 = Color(0xFFFF9F0A) to Color.White
-    val T2 = Color(0xFF0A84FF) to Color.White
-    val T3 = Color(0xFF30D158) to Color.White
-    val T4 = Color(0xFFBF5AF2) to Color.White
-    val T5 = Color(0xFFFF375F) to Color.White
-    val T6 = Color(0xFF636366) to Color.White
-    val T7 = Color(0xFF5E5CE6) to Color.White
-    val T8 = Color(0xFF30B0C7) to Color.White
-    val T9 = Color(0xFF24292F) to Color.White
-    val T10 = Color(0xFF8E8E93) to Color.White
-    val T11 = Color(0xFF3A3A3C) to Color.White
+    // Icon tiles (ab 4.9): one calm grey for every symbol – blue only marks what is active or can be tapped.
+    // Ten colours side by side made the menus look restless (feedback of the user).
+    private val TileBg = Color(0xFF3A3A3C)
+    private val TileFg = Color(0xFFE5E5EA)
+    val T1 = TileBg to TileFg
+    val T2 = TileBg to TileFg
+    val T3 = TileBg to TileFg
+    val T4 = TileBg to TileFg
+    val T5 = TileBg to TileFg
+    val T6 = TileBg to TileFg
+    val T7 = TileBg to TileFg
+    val T8 = TileBg to TileFg
+    val T9 = TileBg to TileFg
+    val T10 = TileBg to TileFg
+    val T11 = TileBg to TileFg
 }
 
 val Accent = FK.Accent
@@ -70,7 +73,8 @@ private val Scheme = darkColorScheme(
 
 private fun typography(): Typography {
     val base = Typography()
-    fun TextStyle.inter() = copy(fontFamily = Inter)
+    // Ab 4.9: no extra letter spacing – Material's 0.5 sp made every text look wide and coarse.
+    fun TextStyle.inter() = copy(fontFamily = Inter, letterSpacing = 0.sp)
     return Typography(
         displayLarge = base.displayLarge.inter(), displayMedium = base.displayMedium.inter(), displaySmall = base.displaySmall.inter(),
         headlineLarge = base.headlineLarge.inter(), headlineMedium = base.headlineMedium.inter(), headlineSmall = base.headlineSmall.inter(),
