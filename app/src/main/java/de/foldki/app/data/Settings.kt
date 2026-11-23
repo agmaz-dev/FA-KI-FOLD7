@@ -117,6 +117,38 @@ class Settings(context: Context) {
         get() = prefs.getLong("s3_last", 0L)
         set(v) = prefs.edit().putLong("s3_last", v).apply()
 
+    /** Einstellungen pro Modell (ab 4.9): Datei → [ModelParams]. Ohne Eintrag gelten die empfohlenen Werte. */
+    fun modelParams(file: String): ModelParams {
+        val o = runCatching { org.json.JSONObject(prefs.getString("model_params", "{}") ?: "{}").optJSONObject(file) }.getOrNull()
+        return if (o == null) ModelParams.recommended(file) else ModelParams.fromJson(o)
+    }
+
+    fun setModelParams(file: String, p: ModelParams?) {
+        val o = runCatching { org.json.JSONObject(prefs.getString("model_params", "{}") ?: "{}") }.getOrDefault(org.json.JSONObject())
+        if (p == null) o.remove(file) else o.put(file, p.toJson())
+        prefs.edit().putString("model_params", o.toString()).apply()
+    }
+
+    /** NPU-Leistung (Hexagon, ab 4.9): "power_saver" (sparsam), "balanced" (ausgewogen, Standard) oder "burst" (maximal). */
+    var npuPower: String
+        get() = prefs.getString("npu_power", "balanced") ?: "balanced"
+        set(v) = prefs.edit().putString("npu_power", v).apply()
+
+    /** Stimme (ab 4.9): Phonon-Sprecher, Standard Anton. */
+    var phononVoice: String
+        get() = prefs.getString("phonon_voice", "anton") ?: "anton"
+        set(v) = prefs.edit().putString("phonon_voice", v).apply()
+
+    /** Live-Diktat mit ML Kit (ab 4.9, Standard an); aus = Whisper. */
+    var liveDictation: Boolean
+        get() = prefs.getBoolean("live_dictation", true)
+        set(v) = prefs.edit().putBoolean("live_dictation", v).apply()
+
+    /** Hugging-Face-Token (nur für den einmaligen Download der Phonon-Stimme, bleibt auf dem Handy). */
+    var hfToken: String
+        get() = prefs.getString("hf_token", "") ?: ""
+        set(v) = prefs.edit().putString("hf_token", v.trim()).apply()
+
     /** "Antworten automatisch vorlesen" (page Stimmen). */
     var autoSpeak: Boolean
         get() = prefs.getBoolean("auto_speak", false)
