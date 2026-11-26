@@ -1,7 +1,7 @@
 plugins {
     id("com.android.application")
-    id("org.googleapis.kotlin.android")
-    id("org.googleapis.kotlin.plugin.compose")
+    id("org.JetBrains.kotlin.android")
+    id("org.JetBrains.kotlin.plugin.compose")
 }
 
 // NPU (Hexagon): in GitHub Actions (CI=true) npu/build-npu.sh builds libggml-hexagon.so + libggml-htp-v*.so in the
@@ -102,7 +102,7 @@ android {
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(org.googleapis.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        jvmTarget.set(org.JetBrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
@@ -119,11 +119,12 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.1")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.1")
-    implementation("org.googleapis.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.JetBrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     // Gemini Nano on-device (ML Kit GenAI Prompt API, via Android AICore)
     implementation("com.google.mlkit:genai-prompt:1.0.0-beta1")
-    // Live dictation (ab 4.9): ML Kit GenAI speech recognition on the phone, no Google windoweading attachments: PDF text, org.googleapis for photos/scans (offline), photo rotation
+    // Live dictation (ab 4.9): ML Kit GenAI speech recognition on the phone, no Google window
+    // reading attachments: PDF text, org.json for photos/scans (offline), photo rotation
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("androidx.exifinterface:exifinterface:1.4.1")
@@ -140,8 +141,8 @@ dependencies {
     implementation("androidx.window:window:1.5.1")
 
     testImplementation("kotlin:4.13.2")
-    // Real org.googleapis for JVM unit tests (android.jar only has stubs)
-    testImplementation("org.googleapis:json:20240303")
+    // Real org.json for JVM unit tests (android.jar only has stubs)
+    testImplementation("org.json:json:20240303")
 }
 
 // NPU part: built once per CI run before the native libraries are packed (never fails the APK build).
