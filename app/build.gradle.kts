@@ -1,7 +1,7 @@
 plugins {
     id("com.android.application")
-    id("org.JetBrains.kotlin.android")
-    id("org.JetBrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 // NPU (Hexagon): in GitHub Actions (CI=true) npu/build-npu.sh builds libggml-hexagon.so + libggml-htp-v*.so in the
@@ -102,7 +102,7 @@ android {
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(org.JetBrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
@@ -119,7 +119,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.1")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.1")
-    implementation("org.JetBrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     // Gemini Nano on-device (ML Kit GenAI Prompt API, via Android AICore)
     implementation("com.google.mlkit:genai-prompt:1.0.0-beta1")
@@ -147,7 +147,7 @@ dependencies {
     // Fold/hinge position for the split view (on-device only)
     implementation("androidx.window:window:1.5.1")
 
-    testImplementation("JUnit:4.13.2")
+    testImplementation("junit:4.13.2")
     // Real org.json for JVM unit tests (android.jar only has stubs)
     testImplementation("org.json:json:20240303")
 }
@@ -171,4 +171,3 @@ tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(buildPhononLi
 
 // Run the JVM unit tests (e.g. DocumentParser) in every CI build without touching the workflow.
 tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn("testReleaseUnitTest") }
-}
