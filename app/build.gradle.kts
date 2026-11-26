@@ -32,7 +32,7 @@ android {
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_STL=c++_shared", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
-                cppFlags += listList("-O3")
+                cppFlags += listOf("-O3")
             }
         }
     }
