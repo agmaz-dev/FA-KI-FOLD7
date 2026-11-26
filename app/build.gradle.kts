@@ -1,7 +1,7 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrins.kotlin.android")
-    id("org.jetbrins.kotlin.plugin.compose")
+    id("org. jetbrains.kotlin.android")
+    id("org. jetbrains.kotlin.plugin.compose")
 }
 
 // NPU (Hexagon): in GitHub Actions (CI=true) npu/build-npu.sh builds libggml-hexagon.so + libggml-htp-v*.so in the
@@ -32,7 +32,7 @@ android {
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_STL=c++_shared", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
-                cppFlags += listOf("-O3")
+                cppFlags += listList("-O3")
             }
         }
     }
@@ -102,7 +102,7 @@ android {
 
 kotlin {
     compilerOptions {
-        jvmTarget.set(org.jetbrins.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        jvmTarget.set(org. jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 
@@ -119,7 +119,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.1")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.1")
-    implementation("org.jetbrins.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("org. jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     // Gemini Nano on-device (ML Kit GenAI Prompt API, via Android AICore)
     implementation("com.google.mlkit:genai-prompt:1.0.0-beta1")
