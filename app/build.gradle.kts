@@ -147,7 +147,7 @@ dependencies {
     // Fold/hinge position for the split view (on-device only)
     implementation("androidx.window:window:1.5.1")
 
-    testImplementation("junit:jupiter:5.10.2")
+    testImplementation("JUnit:4.13.2")
     // Real org.json for JVM unit tests (android.jar only has stubs)
     testImplementation("org.json:json:20240303")
 }
@@ -171,3 +171,4 @@ tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(buildPhononLi
 
 // Run the JVM unit tests (e.g. DocumentParser) in every CI build without touching the workflow.
 tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn("testReleaseUnitTest") }
+}
