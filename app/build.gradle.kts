@@ -31,7 +31,7 @@ android {
         // (llama/ggml are several libraries; the compute parts CPU + GPU/OpenCL are loaded at runtime).
         externalNativeBuild {
             cmake {
-                arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_STL=c++_shared", "-D ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
+                arguments += listOf("-DCMAKE_BUILD_TYPE=Release", "-DANDROID_STL=c++_shared", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
                 cppFlags += listOf("-O3")
             }
         }
@@ -39,8 +39,8 @@ android {
 
     externalNativeBuild {
         cmake {
-        path = file("src/main/cpp/CMakeLists.txt")
-        version = "3.22.1"
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
         }
     }
 
@@ -59,7 +59,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-        signingConfig = signingConfigs.getByName("sideload")
+            signingConfig = signingConfigs.getByName("sideload")
         }
     }
 
@@ -71,14 +71,14 @@ android {
     buildFeatures { compose = true }
 
     // NPU part (libggml-hexagon.so + DSP libraries libggml-htp-v73…v85.so), built by GitHub Actions into app/npu-libs.
-    // Missing folder (local build will also pack whatever lands there)
+    // Missing folder (local build or failed NPU build) = APK without NPU; GPU/CPU work as before.
     sourceSets["main"].jniLibs.srcDir("npu-libs")
     // Phonon (ab 4.9): libptts_ffi.so, built by GitHub Actions into app/phonon-libs (missing = APK without Phonon).
     sourceSets["main"].jniLibs.srcDir("phonon-libs")
 
     packaging {
         jniLibs {
-            // Unpacked into nativeLibraryDir, of llama.cpp finds its compute parts (libggml-cpu.so, libggml-opencl.so).
+            // Unpacked into nativeLibraryDir, so llama.cpp finds its compute parts (libggml-cpu.so, libggml-opencl.so).
             useLegacyPackaging = true
             // Only needed for linking: at runtime the phone's own OpenCL (/vendor/lib64/libOpenCL.so) must be used.
             excludes += "**/libOpenCL.so"
@@ -124,7 +124,14 @@ dependencies {
     // Gemini Nano on-device (ML Kit GenAI Prompt API, via Android AICore)
     implementation("com.google.mlkit:genai-prompt:1.0.0-beta1")
     // Live dictation (ab 4.9): ML Kit GenAI speech recognition on the phone, no Google window
-    // reading attachments: PDF text, org.json for photos/scans (offline), photo rotation
+    implementation("com.google.mlkit:genai-speech-recognition:1.0.0-alpha1")
+    // Phonon voice (ab 4.9): calls libptts_ffi.so through JNA, like xn-ptts' PhononTTS.kt
+    implementation("net.java.dev.jna:jna:5.17.0@aar")
+
+    // Optional Gemma 4 E2B on-device (LiteRT-LM). Pinned; needs Kotlin >= 2.3 (metadata 2.4).
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.20.0")
+
+    // Reading attachments: PDF text, OCR for photos/scans (offline), photo rotation
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("androidx.exifinterface:exifinterface:1.4.1")
@@ -140,7 +147,7 @@ dependencies {
     // Fold/hinge position for the split view (on-device only)
     implementation("androidx.window:window:1.5.1")
 
-    testImplementation("kotlin:4.13.2")
+    testImplementation("junit:junit:4.13.2")
     // Real org.json for JVM unit tests (android.jar only has stubs)
     testImplementation("org.json:json:20240303")
 }
@@ -153,7 +160,7 @@ val buildNpuLibs = tasks.register<Exec>("buildNpuLibs") {
 }
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(buildNpuLibs) }
 
-// Phonon part (ab 4.9): built once per CI builds with Rust + the runner's Android NDK (never fails the APK build).
+// Phonon part (ab 4.9): built once per CI run with Rust + the runner's Android NDK (never fails the APK build).
 val phononScript = rootProject.file("phonon/build-phonon.sh")
 val buildPhononLibs = tasks.register<Exec>("buildPhononLibs") {
     onlyIf { System.getenv("CI") == "true" && phononScript.exists() }
@@ -162,6 +169,5 @@ val buildPhononLibs = tasks.register<Exec>("buildPhononLibs") {
 }
 tasks.matching { it.name == "preBuild" }.configureEach { dependsOn(buildPhononLibs) }
 
-// Run the JVM unit tests (android.jar only has stubs)
+// Run the JVM unit tests (e.g. DocumentParser) in every CI build without touching the workflow.
 tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn("testReleaseUnitTest") }
-}
