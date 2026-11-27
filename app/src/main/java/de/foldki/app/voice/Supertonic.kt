@@ -343,7 +343,9 @@ class Supertonic(context: Context) {
         while (text.contains("''")) text = text.replace("''", "'")
         text = text.replace(Regex("\\s+"), " ").trim()
         if (!Regex("[.!?;:,'\")\\]}…。」』】〉》›»]$").containsMatchIn(text)) text += "."
-        return "<$lang>$text</$lang>"
+        val result = "<$lang>$text</$lang>"
+        de.foldki.app.data.TextTrace.speech(input, result)
+        return result
     }
 
     private fun chunkText(text: String, maxLen: Int): List<String> {

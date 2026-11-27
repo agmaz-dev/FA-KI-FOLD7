@@ -942,7 +942,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun send(text: String, voice: Boolean = false, noLimit: Boolean = false) {
         val pendingFiles = _ui.value.pending
-        val prompt = text.trim().ifEmpty { if (pendingFiles.isNotEmpty()) "Was steht in diesem Dokument? Fasse es kurz zusammen." else "" }
+        val prompt = (if (de.foldki.app.ai.TextIntegrity.preserve(text)) text else text.trim()).ifBlank { if (pendingFiles.isNotEmpty()) "Was steht in diesem Dokument? Fasse es kurz zusammen." else "" }
         if (prompt.isEmpty() || _ui.value.generating || _ui.value.importing) return
         // "als PDF bitte": the app makes the PDF from the last answer itself (no model needed).
         if (pendingFiles.isEmpty() && (prompt.length <= 80 || (prompt.length <= 160 && PDF_MAKE.containsMatchIn(prompt))) && !INFO_QUESTION.containsMatchIn(prompt)) {
@@ -953,7 +953,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
         // „Länge“: letters and documents are always written in full; else the model is told the length and ends the sentence.
         val docTask = LETTER_WORDS.containsMatchIn(prompt) || DOC_WORDS.containsMatchIn(prompt)
-        val answerLimit = if (noLimit || docTask) 0 else settings.answerLength.tokens
+        val diagnostic = de.foldki.app.ai.TextIntegrity.isProbe(prompt) && !(_ui.value.current?.incognito ?: _ui.value.incognito)
+        val answerLimit = if (noLimit || docTask || diagnostic) 0 else settings.answerLength.tokens
         val lengthHint = when {
             voice && !docTask -> "Das ist ein Gespräch mit Sprache: antworte kurz in 1 bis 3 Sätzen, wie gesprochen, ohne Listen, Tabellen oder Markdown."
             answerLimit in 1..500 -> "Antworte kurz: höchstens etwa 200 Wörter. Beende immer den letzten Satz."
@@ -975,7 +976,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
         val ghLikely = settings.githubEnabled && settings.githubToken.isNotBlank() && GITHUB_WORDS.containsMatchIn(prompt)
         // Ab 4.9: no internet search for greetings, letters, documents, attached files, GitHub/tool tasks or empty follow-ups.
-        val web = _ui.value.webSearch && wantsWeb(prompt, docTask, pendingFiles.isNotEmpty(), ghLikely)
+        val web = !diagnostic && _ui.value.webSearch && wantsWeb(prompt, docTask, pendingFiles.isNotEmpty(), ghLikely)
         val useNano = act == Settings.NANO
         val modelName = _ui.value.activeName
         val engine = if (useNano) Engine.NANO else Engine.GEMMA
@@ -984,6 +985,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         var conv = _ui.value.current ?: Conversation(title = prompt.take(40), instruction = _ui.value.newInstruction, incognito = _ui.value.incognito)
         val userMsg = ChatMessage(role = Role.USER, text = prompt, attachments = pendingFiles)
         val botMsg = ChatMessage(role = Role.ASSISTANT, text = "", engine = engine, web = web, model = modelName)
+        de.foldki.app.data.TextTrace.begin(botMsg.id, text, conv.incognito)
+        de.foldki.app.data.TextTrace.stage(botMsg.id, "02 PROMPT_STORED", prompt)
         conv = conv.copy(messages = conv.messages + userMsg + botMsg, updatedAt = System.currentTimeMillis())
         upsert(conv)
         _ui.update { it.copy(currentId = conv.id, generating = true, pending = emptyList()) }
@@ -1014,14 +1017,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 if (letters) analyzeDocs(conv.id, history.flatMap { it.attachments })
                 val history = _ui.value.conversations.firstOrNull { it.id == conv.id }?.messages?.dropLast(1) ?: history
-                val calcHint = de.foldki.app.ai.Calc.hint(prompt)
+                val calcHint = if (diagnostic || de.foldki.app.ai.CodeText.hasCode(prompt)) "" else de.foldki.app.ai.Calc.hint(prompt)
                 val system = (if (useNano) nanoSystem(conv.instruction, lengthHint) else systemWithContext(conv.instruction, lengthHint)) +
                     (if (calcHint.isBlank()) "" else "\n\n" + calcHint)
                 logSystem = system
                 logHistory = history.size
                 val onHot: (String) -> Unit = { t -> editMessage(conv.id, botMsg.id) { it.copy(text = t) } }
-                val ghTask = settings.githubEnabled && isGitHubTask(prompt, history)
-                val mcpTask = mcpReady() && isMcpTask(prompt, history)
+                val ghTask = !diagnostic && settings.githubEnabled && isGitHubTask(prompt, history)
+                val mcpTask = !diagnostic && mcpReady() && isMcpTask(prompt, history)
                 if (ghTask || mcpTask) {
                     // Tools (GitHub, own MCP server) with every model except Gemini Nano: LiteRT, GGUF and the PC server.
                     if (useNano || act.isBlank()) {
@@ -1056,7 +1059,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     finished = true
                     return@launch
                 }
-                if (settings.githubToken.isBlank() && GITHUB_STRONG.containsMatchIn(prompt)) {
+                if (!diagnostic && settings.githubToken.isBlank() && GITHUB_STRONG.containsMatchIn(prompt)) {
                     editMessage(conv.id, botMsg.id) {
                         it.copy(text = "Für GitHub-Aufgaben trag bitte unter Einstellungen → GitHub deinen Token ein und tippe auf „Verbinden & prüfen“. " +
                             "Danach arbeitet das gewählte Modell auf dem Handy mit deinem GitHub – jede Änderung nur mit deiner Freigabe.")
@@ -1084,6 +1087,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     pieces++
                     raw.append(d)
                     val sp = ThinkParser.split(raw.toString(), thinkOpenName || ggufThink, finished = false)
+                    if (diagnostic) {
+                        de.foldki.app.data.TextTrace.stage(botMsg.id, "04 STREAM_CHUNK_" + pieces, d)
+                        if (pieces <= 8 || pieces % 20 == 0) de.foldki.app.data.TextTrace.stage(botMsg.id, "05 STREAM_PARSED_" + pieces, sp.answer)
+                    }
                     if (!sp.thinking && sp.answer.isNotEmpty()) answerPieces++
                     // Length limit: stop at the end of a sentence; only far over the limit is the answer cut.
                     if (answerLimit > 0 && !stopNow) {
@@ -1150,10 +1157,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     llm.chat(conv.id, system, earlier, question, last.id, botMsg.id, temp, params.topK, params.topP)
                         .let { f -> if (engineMax > 0) f.take(engineMax) else f }.takeWhile { !stopNow }.collect { onPiece(it) }
                 }
+                de.foldki.app.data.TextTrace.stage(botMsg.id, "05 STREAM_RAW_COMPLETE", raw.toString())
                 val end = ThinkParser.split(raw.toString(), thinkOpenName || ggufThink, finished = true)
+                de.foldki.app.data.TextTrace.stage(botMsg.id, "06 THINK_PARSER_OUTPUT", end.answer)
                 val now = System.currentTimeMillis()
                 // Ab 4.9: the app checks the answer – sums recomputed, own data instead of placeholders, loops cut, sources.
-                val literalCode = de.foldki.app.ai.CodeText.hasCode(end.answer)
+                val literalCode = diagnostic || de.foldki.app.ai.TextIntegrity.preserve(end.answer)
                 var finalText = end.answer
                 if (!literalCode) {
                     finalText = appExtrasRemoved(finalText)
@@ -1169,7 +1178,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 if (web && lastSources.isNotEmpty() && finalText.isNotBlank())
                     finalText += "\n\nQuellen:\n" + lastSources.take(5).joinToString("\n") { (t, u) -> "• $t – $u" }
-                val claimsPdf = settings.pdfEnabled && PDF_CLAIM.containsMatchIn(finalText)
+                de.foldki.app.data.TextTrace.stored(botMsg.id, finalText)
+                val claimsPdf = !diagnostic && settings.pdfEnabled && PDF_CLAIM.containsMatchIn(finalText)
                 editMessage(conv.id, botMsg.id) {
                     it.copy(
                         text = finalText, thoughts = end.thoughts, firstMs = if (tFirst > 0) tFirst - t0 else 0,

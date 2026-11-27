@@ -742,8 +742,9 @@ private fun ChatScreen(
 
     val actions = MessageActions(
         copy = { text ->
-            (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
-                .setPrimaryClip(android.content.ClipData.newPlainText("Text", text))
+            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Text", text))
+            de.foldki.app.data.TextTrace.clipboard(text, runCatching { clipboard.primaryClip?.getItemAt(0)?.text?.toString() }.getOrNull())
             vm.notify("Kopiert")
         },
         // Every PDF and share button first shows the preview (save / share / change text / discard there).
@@ -924,7 +925,10 @@ private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions,
     } else {
         Column(Modifier.fillMaxWidth()) {
             val parts = remember(m.text) { DocumentParser.parse(m.text) }
-            val clean = remember(m.text) { DocumentParser.display(m.text) }
+            val clean = remember(m.text) { de.foldki.app.ai.TextIntegrity.chat(m.text) }
+            LaunchedEffect(m.id, m.text, typing) {
+                if (!typing) de.foldki.app.data.TextTrace.stage(m.id, "08 RENDERER_INPUT", clean)
+            }
             val doc = parts.document
             val textColor = if (m.isError) FK.Danger else androidx.compose.ui.graphics.Color(0xFFF2F2F7)
             val stillThinking = typing && m.text.isEmpty() && m.thoughts.isNotEmpty()
@@ -941,7 +945,7 @@ private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions,
             if (showStats && !typing && (m.tokens > 0 || m.answerMs > 0)) AnswerStats(m)
             if (!typing && !m.isError && m.text.isNotBlank()) {
                 Row(Modifier.padding(top = 4.dp).offset(x = (-8).dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    IconAction(Icons.Default.ContentCopy, "Kopieren") { actions.copy(DocumentParser.copyText(m.text)) }
+                    IconAction(Icons.Default.ContentCopy, "Kopieren") { actions.copy(de.foldki.app.ai.TextIntegrity.copy(m.text)) }
                     IconAction(if (actions.speakingId == m.id) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
                         if (actions.speakingId == m.id) "Vorlesen stoppen" else "Vorlesen") { actions.speak(m.id, DocumentParser.spoken(m.text)) }
                     IconAction(Icons.Default.StarBorder, "Merken") { actions.save(m) }

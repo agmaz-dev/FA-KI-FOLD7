@@ -31,7 +31,7 @@ object ThinkParser {
         }
         if (finished) {
             val answer = clean(body, true)
-            return Split("", if (CodeText.hasCode(answer)) answer else answer.trim(), thinking = false)
+            return Split("", if (TextIntegrity.preserve(answer)) answer else answer.trim(), thinking = false)
         }
         return if (startsWithTag || thinkOpen) Split(clean(body, false).trim(), "", thinking = true)
         else Split("", clean(body, false), thinking = false)

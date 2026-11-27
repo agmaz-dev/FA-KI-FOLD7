@@ -122,13 +122,19 @@ class LocalEngine(context: Context) {
         val ids = earlier.map { it.id }
         val budget = inputBudgetChars
         // Reuse the open conversation only while everything still fits into the model's context.
-        val reuse = kept != null && keptKey == key && keptSystem == system && keptTemp == temperature && keptIds == ids && keptTurns < MAX_KEPT_TURNS &&
+        val probe = de.foldki.app.data.TextTrace.active(answerId)
+        val reuse = !probe && kept != null && keptKey == key && keptSystem == system && keptTemp == temperature && keptIds == ids && keptTurns < MAX_KEPT_TURNS &&
             system.length + keptChars + question.length <= budget
-        var conv = if (reuse) kept!! else open(e, system, earlier, budget - system.length - question.length, temperature)
+        var conv = if (reuse) kept!! else open(e, system, if (probe) emptyList() else earlier, budget - system.length - question.length, temperature)
             .also { kept = it; keptKey = key; keptSystem = system; keptTemp = temperature; keptTurns = 0 }
         keptIds = emptyList() // only valid again after a complete answer
         val sb = StringBuilder()
         var done = false
+        if (probe) {
+            de.foldki.app.data.TextTrace.stage(answerId, "03 SDK_PROMPT", question)
+            val f = loadedPath?.let { java.io.File(it) }
+            de.foldki.app.data.TextTrace.stage(answerId, "03 SDK_RUNTIME", "LiteRT-LM dependency 0.20.0 | backend=" + backendUsed + " | context=" + contextTokens + " | model=" + f?.name + " | bytes=" + f?.length() + " | modified=" + f?.lastModified() + " | cache=" + loadedPath?.let { cacheFor(it, backendUsed ?: "CPU") } + " | fresh conversation")
+        }
         try {
             try {
                 conv.sendMessageAsync(question).collect { m -> val t = text(m); if (t.isNotEmpty()) { sb.append(t); emit(t) } }
@@ -144,7 +150,8 @@ class LocalEngine(context: Context) {
             keptTurns += 2
             keptChars += question.length + sb.length
         } finally {
-            if (!done) { runCatching { conv.cancelProcess() }; dropKept() }
+            if (probe) de.foldki.app.data.TextTrace.stage(answerId, "04 SDK_CONTENT_TEXT_JOINED", sb.toString())
+            if (!done || probe) { if (!done) runCatching { conv.cancelProcess() }; dropKept() }
         }
     }.flowOn(Dispatchers.Default)
 
@@ -270,6 +277,8 @@ class LocalEngine(context: Context) {
      */
     private fun cacheFor(modelPath: String, backend: String): String =
         if (backend == "GPU" && !HfModels.isGpuFile(modelPath) && !modelPath.substringAfterLast('/').lowercase().startsWith("gemma")) NO_CACHE
+        else if (modelPath.substringAfterLast('/').lowercase().let { "gemma" in it && "e4b" in it })
+            java.io.File(app.cacheDir, "litertlm-020-e4b-v57").apply { mkdirs() }.path
         else app.cacheDir.path
 
     /** One way to start the engine. */
