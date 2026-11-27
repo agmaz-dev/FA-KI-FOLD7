@@ -137,6 +137,11 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, on
         else -> "Einstellungen"
     }
 
+    if (page == "models" || page == "hf") {
+        PremiumModelCenter(vm, ui, initialDiscover = page == "hf", onBack = { saveAll(); back() },
+            onNano = { page = "nano" }, onServer = { page = "server" })
+        return
+    }
     Surface(color = FK.Bg, modifier = Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             // Top bar like the mock-ups: ☰ on pages from the menu, ‹ on sub pages, ✕ on "PC-Server"; the page's action on the right.

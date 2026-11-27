@@ -362,7 +362,7 @@ private fun ago(iso: String): String {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun WebMode(vm: ChatViewModel, onOpen: (String) -> Unit, onClose: () -> Unit) {
+internal fun WebMode(vm: ChatViewModel, onOpen: (String) -> Unit, onClose: () -> Unit) {
     var view by remember { mutableStateOf<WebView?>(null) }
     var url by remember { mutableStateOf("huggingface.co") }
     // Ab 4.9: own address/search field (Compose) – typing, copying and pasting work here even where the web page's
