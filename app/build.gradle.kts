@@ -23,8 +23,8 @@ android {
         applicationId = "de.foldki.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 54
-        versionName = "4.9.1"
+        versionCode = 55
+        versionName = "4.9.2"
         // Galaxy Z Fold7 and all current phones are 64-bit ARM; keeps the APK small.
         ndk { abiFilters += "arm64-v8a" }
         // GGUF models: llama.cpp (from FA Fold KI), always optimised, 16 KB pages, shared C++ runtime
@@ -129,7 +129,7 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.17.0@aar")
 
     // Optional Gemma 4 E2B on-device (LiteRT-LM). Pinned; needs Kotlin >= 2.3 (metadata 2.4).
-    implementation("com.google.ai.edge.litertlm:litertlm-android:0.19.1")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.20.0")
 
     // Reading attachments: PDF text, OCR for photos/scans (offline), photo rotation
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
