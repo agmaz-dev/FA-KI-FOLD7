@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Close
