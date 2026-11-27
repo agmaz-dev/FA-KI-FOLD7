@@ -47,6 +47,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
           name: Fold KI ${{ steps.build.outputs.version }} (Build ${{ github.run_number }})
           body: "Fold KI ${{ steps.build.outputs.version }} – APK zum direkten Installieren auf Android. Branch: ${{ github.ref_name }}"
           files: FoldKI-*.apk

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -84,7 +85,7 @@ fun SettingRow(
     ) {
         if (leading != null) { leading(); Spacer(Modifier.width(12.dp)) }
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = FK.Text, maxLines = 3, overflow = TextOverflow.Ellipsis)
             if (!subtitle.isNullOrBlank()) Text(subtitle, fontSize = 13.sp, color = FK.Muted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.width(12.dp))
@@ -100,7 +101,7 @@ fun Chevron() = Icon(
 
 /** Grey value on the right of a row ("leer", "GPU", "75 %"). */
 @Composable
-fun RowValue(text: String) = Text(text, fontSize = 15.sp, color = FK.Muted, maxLines = 1)
+fun RowValue(text: String) = Text(text, fontSize = 12.sp, color = FK.Muted, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 104.dp))
 
 /** Small status label, green when [on] ("bereit"). */
 @Composable

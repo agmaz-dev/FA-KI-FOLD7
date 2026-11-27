@@ -178,7 +178,9 @@ fun ChatApp(vm: ChatViewModel) {
     }
     BoxWithConstraints(Modifier.fillMaxSize().background(FK.Bg)) {
         val wide = maxWidth >= 600.dp // Fold7 unfolded / tablets: two panes with a draggable divider
-        if (wide) {
+        if (wide && showSettings) {
+            SettingsScreen(vm, ui, startPage = page!!.ifEmpty { null }, onBack = { page = null }, onMenu = { page = null })
+        } else if (wide) {
             // Mock-up 18: chat list left, chat right. The ⚙ in the model card at the bottom opens the menu (mock-up 2).
             val openPage: (String) -> Unit = { p -> split.expandFirst(); page = p }
             val paneScope = rememberCoroutineScope()
@@ -288,14 +290,14 @@ private fun MenuPanel(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, 
         Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 6.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             AppLogo(30.dp)
             Spacer(Modifier.width(10.dp))
-            Text("Fold KI", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f))
+            Text("Fold KI", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f), maxLines = 1)
             Row(
                 Modifier.height(36.dp).clip(RoundedCornerShape(18.dp)).background(FK.Accent).clickable { vm.newChat(); onPicked() }.padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(Icons.Default.Add, null, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("Neuer Chat", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = androidx.compose.ui.graphics.Color.White)
+                Text("Neu", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = androidx.compose.ui.graphics.Color.White, maxLines = 1)
             }
             if (onCollapse != null) {
                 Spacer(Modifier.width(8.dp))
@@ -330,12 +332,9 @@ private fun MenuPanel(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, 
             }
         }
         Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 14.dp).clip(RoundedCornerShape(14.dp)).background(FK.Surface)) {
-            SettingRow("Modelle", null, leading = { Tile(Icons.Default.Memory, FK.T3) }, onClick = { go("models") }) {
-                StatusDot(ui.backend.isNotBlank() || (ui.usesNano && ui.nanoReady))
-                Spacer(Modifier.width(6.dp))
-                Text(ui.activeName, fontSize = 14.sp, color = FK.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 150.dp))
-                Chevron()
-            }
+            SettingRow("Modelle", ui.activeName, leading = { Tile(Icons.Default.Memory, FK.AccentSoft to FK.Accent) }, onClick = { go("models") })
+            GroupDivider()
+            SettingRow("Verlauf", null, leading = { Tile(Icons.Default.ChatBubbleOutline, FK.AccentSoft to FK.Accent) }, onClick = { go("history") })
             GroupDivider()
             SettingRow("Einstellungen", null, leading = { Tile(Icons.Default.Settings, FK.T10) }, onClick = { go("") })
         }
@@ -653,9 +652,9 @@ private fun StartScreen(ui: UiState, vm: ChatViewModel, onSettings: () -> Unit, 
                 Modifier.padding(bottom = 26.dp).size(92.dp)
                     .shadow(30.dp, RoundedCornerShape(24.dp), ambientColor = androidx.compose.ui.graphics.Color(0xFF6C5CFF), spotColor = androidx.compose.ui.graphics.Color(0xFF6C5CFF)),
             ) { AppLogo(92.dp) }
-            Text("Wie kann ich helfen?", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = FK.Text, letterSpacing = (-0.4).sp, textAlign = TextAlign.Center, lineHeight = 32.sp)
+            Text("Fold KI", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = FK.Text, letterSpacing = (-0.4).sp, textAlign = TextAlign.Center, lineHeight = 32.sp)
             Text(
-                if (ui.incognito) "Inkognito – dieser Chat wird nicht gespeichert." else "Alles bleibt auf deinem Fold.",
+                if (ui.incognito) "Inkognito – dieser Chat wird nicht gespeichert." else "Deine persönliche KI. Lokal und unabhängig.",
                 fontSize = 15.sp, color = FK.Muted, textAlign = TextAlign.Center, lineHeight = 21.sp, modifier = Modifier.padding(top = 10.dp),
             )
             if (ui.usesNano && !ui.nanoReady) {
@@ -667,7 +666,16 @@ private fun StartScreen(ui: UiState, vm: ChatViewModel, onSettings: () -> Unit, 
                 TextButton(onClick = onSettings) { Text("Modell wählen oder herunterladen", color = FK.Accent) }
             }
         }
-        // Ab 4.9 without the two big cards (the user wants a calm start screen); letters and texts are simply asked in the chat.
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HomeAction(Icons.Default.Description, "Dokument", Modifier.weight(1f)) { onCard("Fasse dieses Dokument zusammen.", true) }
+                HomeAction(Icons.Default.Code, "Code", Modifier.weight(1f)) { onCard("Hilf mir beim Programmieren: ", false) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                HomeAction(Icons.Default.Language, "Recherche", Modifier.weight(1f)) { onCard("Recherchiere zu folgendem Thema: ", false) }
+                HomeAction(Icons.Default.Mic, "Sprache", Modifier.weight(1f)) { onCard("Ich möchte eine Frage stellen.", false) }
+            }
+        }
     }
 }
 
@@ -918,8 +926,8 @@ private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions,
             if (m.text.isNotBlank()) Box(Modifier.fillMaxWidth(0.78f), contentAlignment = Alignment.CenterEnd) {
                 Box(
                     Modifier.clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomEnd = 6.dp, bottomStart = 20.dp))
-                        .background(FK.Accent).padding(horizontal = 14.dp, vertical = 10.dp),
-                ) { SelectionContainer { Text(m.text, fontSize = 15.sp, lineHeight = 20.sp, color = androidx.compose.ui.graphics.Color.White) } }
+                        .background(FK.Surface2).padding(horizontal = 14.dp, vertical = 10.dp),
+                ) { SelectionContainer { Text(m.text, fontSize = 15.sp, lineHeight = 20.sp, color = FK.Text) } }
             }
         }
     } else {
@@ -1210,7 +1218,16 @@ private fun extra(text: String) = if (text.isNotBlank()) "\nZusätzliche Hinweis
 @Composable
 private fun SendButton(icon: ImageVector, label: String, enabled: Boolean, size: Dp = 36.dp, onClick: () -> Unit) {
     Box(
-        Modifier.size(size).clip(CircleShape).background(if (enabled) androidx.compose.ui.graphics.Color.White else FK.Surface3).clickable(enabled = enabled, onClick = onClick),
+        Modifier.size(size).clip(CircleShape).background(if (enabled) FK.Accent else FK.Surface3).clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) { Icon(icon, label, tint = androidx.compose.ui.graphics.Color.Black, modifier = Modifier.size(18.dp)) }
+    ) { Icon(icon, label, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(18.dp)) }
+}
+
+@Composable
+private fun HomeAction(icon: ImageVector, label: String, modifier: Modifier, onClick: () -> Unit) {
+    Column(modifier.clip(RoundedCornerShape(16.dp)).background(FK.Surface).clickable(onClick = onClick).padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(icon, null, tint = FK.Accent, modifier = Modifier.size(22.dp))
+        Text(label, fontSize = 13.sp, color = FK.Text, fontWeight = FontWeight.Medium)
+    }
 }

@@ -212,76 +212,34 @@ private fun Overview(
     val version = remember { runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull() ?: "?" }
     val mem by vm.memories.collectAsStateWithLifecycle()
 
-    // Ab 4.9: six clear groups (design "neue Menü-Ordnung"); the side menu only holds the chats.
-    SectionLabel("KI & Modelle", top = 4.dp)
-    Group {
-        SettingRow("Modelle", "herunterladen, wählen, Einstellungen pro Modell", leading = { Tile(Icons.Default.Memory, FK.T3) }, onClick = { open("models") }) {
-            RowValue(ui.activeName.take(18)); Chevron()
-        }
-        GroupDivider()
-        SettingRow("PC-Server", null, leading = { Tile(Icons.Default.Dns, FK.T6) }, onClick = { open("server") }) {
-            RowValue(if (ui.activeServer != null) "aktiv" else if (ui.servers.isEmpty()) "aus" else "${ui.servers.size}"); Chevron()
-        }
-        GroupDivider()
-        SettingRow("Rechnen auf", null, leading = { Tile(Icons.Default.Memory, FK.T3) }, onClick = { open("compute") }) {
-            RowValue(vm.settings.gemmaBackend); Chevron()
-        }
-        GroupDivider()
-        SettingRow("GPU-Anteil (GGUF)", null, leading = { Tile(Icons.Default.Memory, FK.T1) }, onClick = { open("gpu") }) {
-            RowValue("${vm.settings.gpuPercent} %"); Chevron()
-        }
-    }
-    SectionLabel("Verhalten")
-    Group {
-        SettingRow("Meine Anweisungen", "auch Datum & App-Wissen", leading = { Tile(Icons.Default.Person, FK.T4) }, onClick = { open("instructions") }) {
-            RowValue(ui.chatInstructionName.let { if (it == "Standard") "keine" else it }.take(16)); Chevron()
-        }
-        GroupDivider()
-        SettingRow("Systemanweisung", null, leading = { Tile(Icons.Default.Edit, FK.T4) }, onClick = { open("system") }) {
-            RowValue(if (system.isBlank()) "leer" else "eigene"); Chevron()
-        }
-        GroupDivider()
-        SettingRow("Gedächtnis", null, leading = { Tile(Icons.Default.Psychology, FK.T6) }, onClick = { open("memory") }) {
-            RowValue("${mem.size}"); Chevron()
-        }
-    }
-    SectionLabel("Sprache")
-    Group {
-        SettingRow("Stimme, Diktieren & Anruf", null, leading = { Tile(Icons.AutoMirrored.Filled.VolumeUp, FK.T5) }, onClick = { open("voice") }) {
-            RowValue(vm.voice.voiceLabel); Chevron()
-        }
-    }
-    SectionLabel("Werkzeuge")
-    Group {
-        SettingRow("Websuche, GitHub, MCP, Tagesstart", null, leading = { Tile(Icons.Default.Build, FK.T8) }, onClick = { open("tools") }) { Chevron() }
-        GroupDivider()
-        SettingRow("GitHub", null, leading = { Tile(Icons.Default.Code, FK.T9) }, onClick = { open("github") }) {
-            RowValue(if (ghToken.isBlank()) "nicht verbunden" else "verbunden"); Chevron()
-        }
-    }
-    SectionLabel("Briefe")
-    Group {
-        SettingRow("Absender & Unterschrift", null, leading = { Tile(Icons.Default.Description, FK.T1) }, onClick = { open("sender") }) {
-            RowValue(if (list.isEmpty()) "leer" else "${list.size} Profil" + if (list.size > 1) "e" else ""); Chevron()
-        }
-    }
-    SectionLabel("Daten & Hilfe")
-    Group {
-        SettingRow("Verlauf & Chats löschen", null, leading = { Tile(Icons.Default.ChatBubbleOutline, FK.T2) }, onClick = { open("history") }) {
-            RowValue("${ui.conversations.size}"); Chevron()
-        }
-        GroupDivider()
-        SettingRow("S3-Sicherung", null, leading = { Tile(Icons.Default.Cloud, FK.T2) }, onClick = { open("s3") }) {
-            RowValue(if (vm.settings.s3Auto) "an" else "aus"); Chevron()
-        }
-        GroupDivider()
-        SettingRow("Fehlerbericht", null, leading = { Tile(Icons.Default.ReportProblem, FK.T5) }, onClick = { open("report") }) { Chevron() }
-        GroupDivider()
-        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Version", fontSize = 16.sp, fontWeight = FontWeight.Medium, color = FK.Text, modifier = Modifier.weight(1f))
-            RowValue(version)
-        }
-    }
+    PremiumSettingsGroup("KI & Leistung", Icons.Default.Memory, "Modelle, Hardware und Anweisungen", listOf(
+        Triple("Modelle", ui.activeName, "models"),
+        Triple("Rechnen auf", vm.settings.gemmaBackend, "compute"),
+        Triple("GPU-Anteil (GGUF)", "${vm.settings.gpuPercent} %", "gpu"),
+        Triple("Meine Anweisungen", ui.chatInstructionName, "instructions"),
+        Triple("Systemanweisung", if (system.isBlank()) "Standard" else "Eigene", "system")
+    ), open)
+    PremiumSettingsGroup("Stimme & Sprache", Icons.AutoMirrored.Filled.VolumeUp, "Diktat, TTS und Anrufmodus", listOf(
+        Triple("Stimme, Diktieren & Anruf", vm.voice.voiceLabel, "voice")
+    ), open)
+    PremiumSettingsGroup("Werkzeuge & Verbindungen", Icons.Default.Build, "Websuche, GitHub, MCP und PC", listOf(
+        Triple("Werkzeuge", "Websuche, PDF, MCP, Tagesstart", "tools"),
+        Triple("GitHub", if (ghToken.isBlank()) "Nicht verbunden" else "Verbunden", "github"),
+        Triple("PC-Server", "${ui.servers.size} Verbindungen", "server")
+    ), open)
+    PremiumSettingsGroup("Dokumente", Icons.Default.Description, "PDF, Briefe und Unterschriften", listOf(
+        Triple("Absender & Unterschrift", "${list.size} Profile", "sender")
+    ), open)
+    PremiumSettingsGroup("Daten & Sicherheit", Icons.Default.Cloud, "Gedächtnis, Chats, Sicherung und Diagnose", listOf(
+        Triple("Gedächtnis", "${mem.size} Einträge", "memory"),
+        Triple("Verlauf & Chats löschen", "${ui.conversations.size} Chats", "history"),
+        Triple("S3-Sicherung", if (vm.settings.s3Auto) "An" else "Aus", "s3"),
+        Triple("Fehlerbericht", "Diagnose und Protokoll", "report")
+    ), open)
+    PremiumSettingsGroup("Darstellung", Icons.Default.Settings, "Premium · adaptives Fold-Layout", listOf(
+        Triple("Version", version, "")
+    ), open)
+
 }
 
 /** "Rechnen auf": GPU (Standard) or CPU for the models on the phone. */
@@ -867,4 +825,29 @@ fun PageBack(onBack: () -> Unit, hideTitle: Boolean = false, hideBar: Boolean = 
     val c = LocalPageChrome.current
     androidx.compose.runtime.SideEffect { c.back = onBack; c.hideTitle = hideTitle; c.hideBar = hideBar }
     DisposableEffect(Unit) { onDispose { c.back = null; c.hideTitle = false; c.hideBar = false } }
+}
+
+@Composable
+private fun PremiumSettingsGroup(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, subtitle: String,
+    entries: List<Triple<String,String,String>>, open: (String) -> Unit) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Card(Modifier.padding(bottom = 12.dp)) {
+        Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }, verticalAlignment = Alignment.CenterVertically) {
+            Tile(icon, FK.AccentSoft to FK.Accent, size = 40.dp, radius = 12.dp, iconSize = 22.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = FK.Text)
+                Text(subtitle, fontSize = 12.sp, color = FK.Muted)
+            }
+            Text(if (expanded) "⌄" else "›", color = FK.Muted, fontSize = 22.sp)
+        }
+        if (expanded) {
+            Spacer(Modifier.height(8.dp))
+            entries.forEach { (label, value, target) ->
+                SettingRow(label, value, onClick = if (target.isNotEmpty()) ({ open(target) }) else null) {
+                    if (target.isNotEmpty()) Chevron()
+                }
+            }
+        }
+    }
 }
