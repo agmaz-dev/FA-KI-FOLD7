@@ -21,38 +21,51 @@ object ThinkParser {
         val lead = raw.trimStart()
         val startsWithTag = lead.startsWith(OPEN)
         val body = if (startsWithTag) lead.removePrefix(OPEN) else raw
-        val close = body.indexOf(CLOSE)
+        val close = CodeText.mask(body).indexOf(CLOSE)
         if (close >= 0) {
             val thoughts = body.substring(0, close).trim()
             // A second (rare) think block inside the answer is removed as well.
-            val answer = stripBlocks(body.substring(close + CLOSE.length)).trimStart()
+            val rest = stripBlocks(body.substring(close + CLOSE.length), finished)
+            val answer = if (CodeText.hasCode(rest)) rest.trimStart('\n', '\r') else rest.trimStart()
             return Split(thoughts, answer, thinking = false)
         }
-        if (finished) return Split("", clean(body).trim(), thinking = false)
-        return if (startsWithTag || thinkOpen) Split(clean(body).trim(), "", thinking = true)
-        else Split("", clean(body), thinking = false)
+        if (finished) {
+            val answer = clean(body, true)
+            return Split("", if (CodeText.hasCode(answer)) answer else answer.trim(), thinking = false)
+        }
+        return if (startsWithTag || thinkOpen) Split(clean(body, false).trim(), "", thinking = true)
+        else Split("", clean(body, false), thinking = false)
     }
 
     /** Only the answer part (internal tasks: search terms, letter reading, briefing, GitHub steps). */
     fun answerOnly(raw: String, thinkOpen: Boolean = false): String = split(raw, thinkOpen, finished = true).answer
 
-    private fun stripBlocks(s: String): String {
+    private fun stripBlocks(s: String, finished: Boolean): String {
         var t = s
         while (true) {
-            val a = t.indexOf(OPEN)
+            val a = CodeText.mask(t).indexOf(OPEN)
             if (a < 0) break
-            val b = t.indexOf(CLOSE, a)
+            val b = CodeText.mask(t).indexOf(CLOSE, a)
             t = if (b < 0) t.substring(0, a) else t.substring(0, a) + t.substring(b + CLOSE.length)
         }
-        return clean(t)
+        return clean(t, finished)
     }
 
     /** Partial tags at the end of a stream ("</thi") are not shown. */
-    private fun clean(s: String): String {
-        var t = s.replace(OPEN, "").replace(CLOSE, "")
+    private fun clean(s: String, finished: Boolean): String {
+        var t = s
+        for (tag in listOf(OPEN, CLOSE)) {
+            var at = CodeText.mask(t).indexOf(tag)
+            while (at >= 0) {
+                t = t.removeRange(at, at + tag.length)
+                at = CodeText.mask(t).indexOf(tag, at)
+            }
+        }
+        if (finished) return t
+        val masked = CodeText.mask(t)
         for (k in CLOSE.length - 1 downTo 2) {
-            if (t.endsWith(CLOSE.take(k))) { t = t.dropLast(k); break }
-            if (t.endsWith(OPEN.take(k))) { t = t.dropLast(k); break }
+            if (masked.endsWith(CLOSE.take(k))) { t = t.dropLast(k); break }
+            if (masked.endsWith(OPEN.take(k))) { t = t.dropLast(k); break }
         }
         return t
     }

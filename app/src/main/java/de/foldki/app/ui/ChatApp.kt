@@ -932,16 +932,16 @@ private fun MessageRow(m: ChatMessage, typing: Boolean, actions: MessageActions,
             if (doc == null) {
                 if (!stillThinking) AnswerText(textColor, if (m.text.isEmpty() && typing) (if (m.web) "Suche im Internet …" else "…") else clean)
             } else {
-                if (parts.before.isNotBlank()) AnswerText(textColor, DocumentParser.clean(parts.before))
+                if (parts.before.isNotBlank()) AnswerText(textColor, DocumentParser.display(parts.before))
                 if (!typing && actions.pdf) DocLine("Schreiben.pdf", if (parts.complete) "DIN 5008" else "unvollständig") { actions.savePdf(doc) }
                 else SelectionContainer { Text(doc, fontSize = 15.sp, lineHeight = 22.sp, color = textColor) }
-                if (parts.after.isNotBlank()) AnswerText(textColor, DocumentParser.clean(parts.after))
+                if (parts.after.isNotBlank()) AnswerText(textColor, DocumentParser.display(parts.after))
             }
             m.attachments.forEach { a -> DocCard(a, actions) }
             if (showStats && !typing && (m.tokens > 0 || m.answerMs > 0)) AnswerStats(m)
             if (!typing && !m.isError && m.text.isNotBlank()) {
                 Row(Modifier.padding(top = 4.dp).offset(x = (-8).dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                    IconAction(Icons.Default.ContentCopy, "Kopieren") { actions.copy(clean) }
+                    IconAction(Icons.Default.ContentCopy, "Kopieren") { actions.copy(DocumentParser.copyText(m.text)) }
                     IconAction(if (actions.speakingId == m.id) Icons.Default.Stop else Icons.AutoMirrored.Filled.VolumeUp,
                         if (actions.speakingId == m.id) "Vorlesen stoppen" else "Vorlesen") { actions.speak(m.id, DocumentParser.spoken(m.text)) }
                     IconAction(Icons.Default.StarBorder, "Merken") { actions.save(m) }

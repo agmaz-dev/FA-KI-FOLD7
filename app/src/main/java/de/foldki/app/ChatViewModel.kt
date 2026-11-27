@@ -1091,7 +1091,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         else if (answerPieces >= answerLimit * 3 / 2) { stopNow = true; cutNow = true }
                     }
                     // Ab 4.9: loop guard – a model that writes the same block again and again is stopped.
-                    if (!stopNow && answerPieces > 0 && answerPieces % 30 == 0 && repeats(sp.answer)) { stopNow = true; looped = true }
+                    if (!stopNow && answerPieces > 0 && answerPieces % 30 == 0 && !de.foldki.app.ai.CodeText.hasCode(sp.answer) && repeats(sp.answer)) { stopNow = true; looped = true }
                     if (tAnswer == 0L && sp.answer.isNotBlank() && sp.thoughts.isNotEmpty()) tAnswer = System.currentTimeMillis()
                     if (sp.thinking != _ui.value.thinking) _ui.update { it.copy(thinking = sp.thinking) }
                     editMessage(conv.id, botMsg.id) { it.copy(text = sp.answer, thoughts = sp.thoughts) }
@@ -1153,10 +1153,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val end = ThinkParser.split(raw.toString(), thinkOpenName || ggufThink, finished = true)
                 val now = System.currentTimeMillis()
                 // Ab 4.9: the app checks the answer – sums recomputed, own data instead of placeholders, loops cut, sources.
-                var finalText = appExtrasRemoved(end.answer)
-                if (looped) finalText = cutRepeats(finalText) + "\n\n(Wiederholung erkannt – angehalten.)"
-                if (!finalText.contains("```")) finalText = de.foldki.app.ai.Calc.fixEquations(finalText)
-                finalText = fillPlaceholders(finalText)
+                val literalCode = de.foldki.app.ai.CodeText.hasCode(end.answer)
+                var finalText = end.answer
+                if (!literalCode) {
+                    finalText = appExtrasRemoved(finalText)
+                    if (looped) finalText = cutRepeats(finalText) + "\n\n(Wiederholung erkannt – angehalten.)"
+                    finalText = de.foldki.app.ai.Calc.fixEquations(finalText)
+                    finalText = fillPlaceholders(finalText)
+                }
+                de.foldki.app.data.DebugLog.write(
+                    "TEXT-INTEGRITÄT · Modellantwort=" + end.answer.length +
+                        " · gespeichert identisch=" + (end.answer == finalText) +
+                        " · Anzeige identisch=" + (end.answer == DocumentParser.display(finalText)) +
+                        " · Kopie identisch=" + (end.answer == DocumentParser.copyText(finalText))
+                )
                 if (web && lastSources.isNotEmpty() && finalText.isNotBlank())
                     finalText += "\n\nQuellen:\n" + lastSources.take(5).joinToString("\n") { (t, u) -> "• $t – $u" }
                 val claimsPdf = settings.pdfEnabled && PDF_CLAIM.containsMatchIn(finalText)
@@ -1222,7 +1232,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** One chat turn for the local model: a question with the text of its attached files, or an earlier answer. */
     private fun turnOf(m: ChatMessage, fileChars: Int): LocalEngine.Turn {
-        if (m.role != Role.USER) return LocalEngine.Turn(m.id, false, appExtrasRemoved(DocumentParser.display(m.text)).take(2000))
+        if (m.role != Role.USER) return LocalEngine.Turn(m.id, false, (if (de.foldki.app.ai.CodeText.hasCode(m.text)) m.text else appExtrasRemoved(m.text)).take(2000))
         val files = StringBuilder()
         var budget = fileChars
         m.attachments.forEach { a ->

@@ -40,6 +40,8 @@ object DocumentParser {
     )
 
     fun parse(text: String): Parts {
+        // A code example may contain literal document markers or letter greetings.
+        if (de.foldki.app.ai.CodeText.hasBlock(text)) return Parts(text, null, "")
         val s = START.find(text)
         if (s != null) {
             val e = END.find(text, s.range.last + 1)
@@ -144,15 +146,33 @@ object DocumentParser {
     }
 
     /** Removes Markdown so documents look clean in the chat and in the PDF; list items stay readable as "• ". */
-    fun clean(text: String): String = text.lines().joinToString("\n") { l ->
+    fun clean(text: String): String = if (de.foldki.app.ai.CodeText.hasBlock(text)) text else text.lines().joinToString("\n") { l ->
         var s = l
         if (s.trim().matches(Regex("([-*_])\\1{2,}"))) return@joinToString "" // horizontal rule
         s = s.replace(Regex("^(\\s*)#{1,6}\\s+"), "$1")
         s = s.replace(Regex("^(\\s*)>\\s?"), "$1")
         s = s.replace(Regex("^(\\s*)[*+-]\\s+"), "$1• ")
-        s = s.replace("**", "").replace("__", "").replace("`", "")
-        s = s.replace(Regex("(?<![\\w*])\\*(?!\\s)([^*\\n]+?)(?<!\\s)\\*(?![\\w*])"), "$1")
-        s = s.replace(Regex("\\[([^\\]]+)]\\((https?://[^)]+)\\)"), "$1 ($2)")
+        // Only matched emphasis delimiters, never standalone operators or identifiers.
+        // Inline code is left untouched in the chat; for PDF prose remove its enclosing ticks only.
+        val inline = Regex("\u0060([^\u0060\\n]+)\u0060")
+        val emphasis = Regex("(?<![\\w*\\\\])\\*\\*(?![\\s*])(.+?)(?<![\\s*])\\*\\*(?![\\w*])|(?<![\\w_\\\\])__(?![\\s_])(.+?)(?<![\\s_])__(?![\\w_])")
+        fun formatProse(value: String): String = emphasis.replace(value) { it.groups[1]?.value ?: it.groupValues[2] }
+        val spans = inline.findAll(s).toList()
+        if (spans.isEmpty()) s = formatProse(s)
+        else {
+            val original = s
+            s = buildString {
+                var pos = 0
+                for (span in spans) {
+                    append(formatProse(original.substring(pos, span.range.first)))
+                    append(span.groupValues[1])
+                    pos = span.range.last + 1
+                }
+                append(formatProse(original.substring(pos)))
+            }
+        }
+        if (spans.isEmpty()) s = s.replace(Regex("(?<![\\w*])\\*(?!\\s)([^*\\n]+?)(?<!\\s)\\*(?![\\w*])"), "$1")
+        if (spans.isEmpty()) s = s.replace(Regex("\\[([^\\]]+)]\\((https?://[^)]+)\\)"), "$1 ($2)")
         s.trimEnd()
     }
 
@@ -213,7 +233,10 @@ object DocumentParser {
     }
 
     /** Text for the chat bubble: markers removed, Markdown cleaned. */
-    fun display(text: String): String = clean(stripMarkers(text)).trim()
+    fun display(text: String): String = if (de.foldki.app.ai.CodeText.hasCode(text)) text else clean(stripMarkers(text)).trim()
+
+    /** Clipboard always receives the stored answer, never the lossy document presentation. */
+    fun copyText(text: String): String = text
 
     /** What is read aloud: the comments, not the whole document. */
     fun spoken(text: String): String {
