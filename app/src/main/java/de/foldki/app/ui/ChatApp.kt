@@ -33,6 +33,9 @@ import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Close
@@ -178,32 +181,41 @@ fun ChatApp(vm: ChatViewModel) {
     }
     BoxWithConstraints(Modifier.fillMaxSize().background(FK.Bg)) {
         val wide = maxWidth >= 600.dp // Fold7 unfolded / tablets: two panes with a draggable divider
-        if (wide && showSettings) {
-            SettingsScreen(vm, ui, startPage = page!!.ifEmpty { null }, onBack = { page = null }, onMenu = { page = null })
-        } else if (wide) {
-            // Mock-up 18: chat list left, chat right. The ⚙ in the model card at the bottom opens the menu (mock-up 2).
-            val openPage: (String) -> Unit = { p -> split.expandFirst(); page = p }
-            val paneScope = rememberCoroutineScope()
-            val sidebarClosed by remember { derivedStateOf { split.collapse == PaneCollapse.FIRST } }
-            SplitPane(
-                state = split,
-                modifier = Modifier.fillMaxSize(),
-                onSettled = { f, c -> vm.settings.splitFraction = f; vm.settings.splitCollapse = c.name },
-                first = {
-                    Surface(color = FK.Surface, modifier = Modifier.fillMaxSize()) {
-                        when {
-                            showSettings -> SettingsScreen(vm, ui, startPage = page!!.ifEmpty { null }, onBack = { page = null }, onMenu = { page = null })
-                            else -> MenuPanel(ui, vm, onPage = { openPage(it) }, onPicked = {}, onCollapse = { split.toggleFirst(paneScope) })
+        if (wide) {
+            var historyOpen by rememberSaveable { mutableStateOf(true) }
+            val openPage: (String) -> Unit = { p -> page = p }
+            Row(Modifier.fillMaxSize()) {
+                Column(Modifier.width(48.dp).fillMaxHeight().background(FK.Side).statusBarsPadding().navigationBarsPadding().padding(vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    AppLogo(34.dp)
+                    Spacer(Modifier.height(8.dp))
+                    WorkspaceIcon(Icons.Default.ChatBubbleOutline, "Chat", page == null) { page = null }
+                    WorkspaceIcon(Icons.Default.Memory, "Modelle", page == "models" || page == "hf") { page = "models" }
+                    WorkspaceIcon(Icons.Default.Download, "Downloads", page == "downloads") { page = "downloads" }
+                    WorkspaceIcon(Icons.Default.Dns, "Verbindungen", page == "connections") { page = "connections" }
+                    WorkspaceIcon(Icons.Default.Psychology, "Gedächtnis", page == "memory") { page = "memory" }
+                    Spacer(Modifier.weight(1f))
+                    WorkspaceIcon(Icons.Default.Settings, "Einstellungen", page == "") { page = "" }
+                }
+                if (showSettings) {
+                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                        key(page) { SettingsScreen(vm, ui, startPage = page!!.ifEmpty { null }, onBack = { page = null }, onMenu = { page = null }, workspace = true) }
+                    }
+                } else {
+                    if (historyOpen) {
+                        Box(Modifier.widthIn(min = 170.dp, max = 270.dp).width(maxWidth * .28f).fillMaxHeight()) {
+                            MenuPanel(ui, vm, onPage = openPage, onPicked = {}, onCollapse = { historyOpen = false }, compact = true)
                         }
                     }
-                },
-                second = {
-                    preview?.let { previewPane(it) } ?: ChatScreen(
-                        ui, vm, showMenu = false, onMenu = {}, onSettings = { openPage("models") }, onInstructions = { openPage("instructions") }, onVoiceSettings = { openPage("voice") },
-                        sidebar = SidebarToggle(open = !sidebarClosed, toggle = { split.toggleFirst(paneScope) }),
-                    )
-                },
-            )
+                    Box(Modifier.weight(1f).fillMaxHeight()) {
+                        preview?.let { previewPane(it) } ?: ChatScreen(
+                            ui, vm, showMenu = false, onMenu = {}, onSettings = { openPage("models") },
+                            onInstructions = { openPage("instructions") }, onVoiceSettings = { openPage("voice") },
+                            sidebar = SidebarToggle(historyOpen) { historyOpen = !historyOpen },
+                        )
+                    }
+                }
+            }
         } else {
             val width = LocalConfiguration.current.screenWidthDp.dp - 70.dp
             ModalNavigationDrawer(
@@ -240,6 +252,15 @@ fun ChatApp(vm: ChatViewModel) {
 }
 
 // ---------------------------------------------------------------- Sidebar (image 6)
+
+@Composable
+private fun WorkspaceIcon(icon: ImageVector, label: String, active: Boolean, onClick: () -> Unit) {
+    Box(Modifier.size(44.dp).clip(RoundedCornerShape(9.dp))
+        .background(if (active) FK.AccentSoft else androidx.compose.ui.graphics.Color.Transparent)
+        .clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Icon(icon, label, tint = if (active) FK.Accent else FK.Muted, modifier = Modifier.size(20.dp))
+    }
+}
 
 private enum class ChatKind { LETTER, DOC, CODE, TALK }
 
@@ -280,29 +301,18 @@ private fun dayGroup(t: Long): String {
  * Zugeklappt in der Schublade, aufgeklappt als linke Spalte ([onCollapse] = Knopf zum Einklappen).
  */
 @Composable
-private fun MenuPanel(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, onPicked: () -> Unit, onCollapse: (() -> Unit)?) {
+private fun MenuPanel(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, onPicked: () -> Unit, onCollapse: (() -> Unit)?, compact: Boolean = false) {
     var query by rememberSaveable { mutableStateOf("") }
     var savedTab by rememberSaveable { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf<Conversation?>(null) }
     val go: (String) -> Unit = { onPage(it); onPicked() }
     confirmDelete?.let { c -> DeleteChatDialog(c, onDelete = { vm.delete(c.id); confirmDelete = null }, onDismiss = { confirmDelete = null }) }
     Column(Modifier.fillMaxHeight().background(FK.Side).statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 12.dp, top = 6.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            AppLogo(30.dp)
-            Spacer(Modifier.width(10.dp))
-            Text("Fold KI", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = FK.Text, modifier = Modifier.weight(1f), maxLines = 1)
-            Row(
-                Modifier.height(36.dp).clip(RoundedCornerShape(18.dp)).background(FK.Accent).clickable { vm.newChat(); onPicked() }.padding(horizontal = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Default.Add, null, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("Neu", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = androidx.compose.ui.graphics.Color.White, maxLines = 1)
-            }
-            if (onCollapse != null) {
-                Spacer(Modifier.width(8.dp))
-                NavBtn(Icons.AutoMirrored.Filled.MenuOpen, "Seitenleiste einklappen", bg = FK.Surface2, onClick = onCollapse)
-            }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (!compact) { AppLogo(30.dp); Spacer(Modifier.width(8.dp)) }
+            Text(if (compact) "Chats" else "Fold KI", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, modifier = Modifier.weight(1f), maxLines = 1)
+            IconButton(onClick = { vm.newChat(); onPicked() }, modifier = Modifier.size(44.dp)) { Icon(Icons.Default.Edit, "Neuer Chat", tint = FK.Accent, modifier = Modifier.size(18.dp)) }
+            if (onCollapse != null) IconButton(onClick = onCollapse, modifier = Modifier.size(44.dp)) { Icon(Icons.AutoMirrored.Filled.MenuOpen, "Chatliste einklappen", tint = FK.Muted, modifier = Modifier.size(18.dp)) }
         }
         MenuSearch(query, { query = it }, Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp))
         Segmented(listOf("Alle", "Gemerkt"), if (savedTab) 1 else 0, Modifier.padding(start = 12.dp, end = 12.dp, bottom = 6.dp)) { savedTab = it == 1 }
@@ -331,10 +341,8 @@ private fun MenuPanel(ui: UiState, vm: ChatViewModel, onPage: (String) -> Unit, 
                 }
             }
         }
-        Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 14.dp).clip(RoundedCornerShape(14.dp)).background(FK.Surface)) {
+        if (!compact) Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 14.dp).clip(RoundedCornerShape(14.dp)).background(FK.Surface)) {
             SettingRow("Modelle", ui.activeName, leading = { Tile(Icons.Default.Memory, FK.AccentSoft to FK.Accent) }, onClick = { go("models") })
-            GroupDivider()
-            SettingRow("Verlauf", null, leading = { Tile(Icons.Default.ChatBubbleOutline, FK.AccentSoft to FK.Accent) }, onClick = { go("history") })
             GroupDivider()
             SettingRow("Einstellungen", null, leading = { Tile(Icons.Default.Settings, FK.T10) }, onClick = { go("") })
         }
@@ -368,8 +376,8 @@ private fun ChatListItem(c: Conversation, selected: Boolean, onLong: () -> Unit 
         Modifier.padding(horizontal = 8.dp).fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (selected) FK.Surface2 else androidx.compose.ui.graphics.Color.Transparent)
             .combinedClickable(onClick = onClick, onLongClick = onLong, onLongClickLabel = "Löschen").padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
-        Text(c.title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(listOf(model, t).filter { it.isNotBlank() }.joinToString(" · "), fontSize = 12.sp, color = FK.Muted, maxLines = 1)
+        Text(c.title, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(t, fontSize = 11.sp, color = FK.Muted, maxLines = 1)
     }
 }
 
@@ -454,37 +462,19 @@ private fun modelReady(ui: UiState): Boolean = ui.modelReady
 /** Top bar exactly like mock-ups 1 and 11: ☰ left, model in the middle, new chat (empty chat) or ⋮ (chat with messages) right. */
 @Composable
 private fun TopBar(ui: UiState, showMenu: Boolean, onMenu: () -> Unit, sidebar: SidebarToggle?, onModel: () -> Unit, onNew: () -> Unit, onOptions: () -> Unit) {
-    val empty = ui.current?.messages.isNullOrEmpty()
-    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(36.dp)) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(44.dp)) {
             if (showMenu) NavBtn(Icons.Default.Menu, "Menü", onClick = onMenu)
-            else if (sidebar != null && !sidebar.open) NavBtn(Icons.Default.Menu, "Seitenleiste öffnen", onClick = sidebar.toggle)
+            else if (sidebar != null && !sidebar.open) NavBtn(Icons.Default.Menu, "Chatliste öffnen", onClick = sidebar.toggle)
         }
-        Column(
-            Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable(onClick = onModel).padding(vertical = 2.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(modelName(ui) + " ˅", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (ui.incognito) Text("🕶 Inkognito", fontSize = 12.sp, color = FK.Muted)
-                else {
-                    // Ab 4.9: green only when the model is really loaded; "nicht geladen" = it loads with the next question.
-                    val loaded = ui.backend.isNotBlank() || (ui.usesNano && ui.nanoReady) || (ui.activeServer != null && modelReady(ui))
-                    if (loaded) { Box(Modifier.size(7.dp).clip(CircleShape).background(FK.Ok)); Spacer(Modifier.width(4.dp)) }
-                    Text(
-                        listOfNotNull(
-                            when { ui.usesNano -> "AICore"; ui.activeServer != null -> "PC-Server"; else -> ui.backend.ifBlank { if (ui.activeModel.isBlank()) "kein Modell" else "lädt bei der nächsten Frage" } },
-                            if (ui.webSearch) "Web" else null,
-                        ).joinToString(" · "),
-                        fontSize = 12.sp, color = FK.Muted,
-                    )
-                }
+        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+            Row(Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = onModel).padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("KI-Modell", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = FK.Text)
+                Icon(Icons.Default.KeyboardArrowDown, null, tint = FK.Muted, modifier = Modifier.size(18.dp))
+                if (ui.incognito) Text(" · Inkognito", fontSize = 11.sp, color = FK.Muted)
             }
         }
-        Box(Modifier.size(36.dp)) {
-            // Immer ⋮ (Chat-Optionen), auch im leeren Chat – z. B. um „Denken“ vor der ersten Frage einzustellen. Neuer Chat: Menü.
-            NavBtn(Icons.Default.MoreVert, "Chat-Einstellungen", onClick = onOptions)
-        }
+        Box(Modifier.size(44.dp)) { NavBtn(Icons.Default.MoreVert, "Chat-Einstellungen", onClick = onOptions) }
     }
 }
 
@@ -643,38 +633,15 @@ private fun greeting(): String {
 /** Start screen exactly like mock-up 1: blue orb, "Wie kann ich helfen?", "Alles bleibt auf deinem Fold.", two cards. */
 @Composable
 private fun StartScreen(ui: UiState, vm: ChatViewModel, onSettings: () -> Unit, onCard: (String, Boolean) -> Unit) {
-    Column(Modifier.fillMaxSize()) {
-        Column(
-            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 30.dp),
-            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center,
-        ) {
-            Box(
-                Modifier.padding(bottom = 26.dp).size(92.dp)
-                    .shadow(30.dp, RoundedCornerShape(24.dp), ambientColor = androidx.compose.ui.graphics.Color(0xFF6C5CFF), spotColor = androidx.compose.ui.graphics.Color(0xFF6C5CFF)),
-            ) { AppLogo(92.dp) }
-            Text("Fold KI", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = FK.Text, letterSpacing = (-0.4).sp, textAlign = TextAlign.Center, lineHeight = 32.sp)
-            Text(
-                if (ui.incognito) "Inkognito – dieser Chat wird nicht gespeichert." else "Deine persönliche KI. Lokal und unabhängig.",
-                fontSize = 15.sp, color = FK.Muted, textAlign = TextAlign.Center, lineHeight = 21.sp, modifier = Modifier.padding(top = 10.dp),
-            )
-            if (ui.usesNano && !ui.nanoReady) {
-                Spacer(Modifier.height(8.dp))
-                Note(ui.nanoStatus)
-                if (ui.nanoDownloadable) TextButton(onClick = { vm.downloadNano() }) { Text("Gemini Nano herunterladen", color = FK.Accent) }
-                else TextButton(onClick = { vm.checkNano() }) { Text("Erneut prüfen", color = FK.Accent) }
-            } else if (!ui.modelReady) {
-                TextButton(onClick = onSettings) { Text("Modell wählen oder herunterladen", color = FK.Accent) }
-            }
-        }
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                HomeAction(Icons.Default.Description, "Dokument", Modifier.weight(1f)) { onCard("Fasse dieses Dokument zusammen.", true) }
-                HomeAction(Icons.Default.Code, "Code", Modifier.weight(1f)) { onCard("Hilf mir beim Programmieren: ", false) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                HomeAction(Icons.Default.Language, "Recherche", Modifier.weight(1f)) { onCard("Recherchiere zu folgendem Thema: ", false) }
-                HomeAction(Icons.Default.Mic, "Sprache", Modifier.weight(1f)) { onCard("Ich möchte eine Frage stellen.", false) }
-            }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        AppLogo(64.dp)
+        Spacer(Modifier.height(16.dp))
+        Text("Wie kann ich helfen?", fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = FK.Text, textAlign = TextAlign.Center)
+        if (ui.usesNano && !ui.nanoReady) {
+            Note(ui.nanoStatus)
+            if (ui.nanoDownloadable) TextButton(onClick = { vm.downloadNano() }) { Text("Gemini Nano herunterladen", color = FK.Accent) }
+            else TextButton(onClick = { vm.checkNano() }) { Text("Erneut prüfen", color = FK.Accent) }
         }
     }
 }
@@ -827,6 +794,7 @@ private fun ChatScreen(
             ui, vm, voice, withMic, text, { text = it }, onAttach = { attachOpen = true },
             onVoiceMode = { withMic { voice.stopSpeaking(); speakingId = null; voiceMode = true } },
             onDictate = { voice.stopSpeaking(); speakingId = null },
+            onChatOptions = { optionsOpen = true },
         )
     }
     if (modelOpen) ModelSheet(ui, vm, onDismiss = { modelOpen = false }, onSettings = onSettings)
@@ -1081,8 +1049,9 @@ private fun DocCard(a: Attachment, actions: MessageActions) {
 private fun InputBar(
     ui: UiState, vm: ChatViewModel, voice: VoiceController,
     withMic: (() -> Unit) -> Unit, text: String, setText: (String) -> Unit, onAttach: () -> Unit,
-    onVoiceMode: () -> Unit, onDictate: () -> Unit = {},
+    onVoiceMode: () -> Unit, onDictate: () -> Unit = {}, onChatOptions: () -> Unit = {},
 ) {
+    var plusOpen by remember { mutableStateOf(false) }
     var dictating by remember { mutableStateOf(false) }
     val listenPhase by voice.listenPhase.collectAsState()
     val recognizing = dictating && listenPhase == VoiceController.ListenPhase.TRANSCRIBING
@@ -1169,7 +1138,30 @@ private fun InputBar(
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                RoundOutline(onAttach) { Icon(Icons.Default.Add, "Hinzufügen", tint = FK.Text, modifier = Modifier.size(18.dp)) }
+                Box {
+                    RoundOutline({ plusOpen = true }) { Icon(Icons.Default.Add, "Hinzufügen", tint = FK.Text, modifier = Modifier.size(18.dp)) }
+                    DropdownMenu(expanded = plusOpen, onDismissRequest = { plusOpen = false }, modifier = Modifier.widthIn(max = 270.dp)) {
+                        listOf(
+                            Triple(Icons.Default.AttachFile, "Datei oder Bild anhängen", ""),
+                            Triple(Icons.Default.MailOutline, "Brief schreiben", "Schreibe einen formellen Brief: "),
+                            Triple(Icons.Default.Description, "Dokument zusammenfassen", P_SUMMARY),
+                            Triple(Icons.Default.Edit, "Text verbessern", P_IMPROVE),
+                            Triple(Icons.Default.Code, "Programmieren", "Hilf mir beim Programmieren: "),
+                            Triple(Icons.Default.Language, if (ui.webSearch) "Websuche ausschalten" else "Websuche einschalten", ""),
+                            Triple(Icons.Default.Psychology, "Antwort & Denkmodus", "")
+                        ).forEach { (icon, label, prompt) ->
+                            DropdownMenuItem(text = { Text(label, fontSize = 13.sp) }, leadingIcon = { Icon(icon, null, modifier = Modifier.size(18.dp)) }, onClick = {
+                                plusOpen = false
+                                when (icon) {
+                                    Icons.Default.AttachFile -> onAttach()
+                                    Icons.Default.Language -> vm.setWeb(!ui.webSearch)
+                                    Icons.Default.Psychology -> onChatOptions()
+                                    else -> setText(prompt)
+                                }
+                            })
+                        }
+                    }
+                }
                 Box(Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 8.dp)) {
                     if (text.isEmpty()) Text(
                         when {
@@ -1218,9 +1210,9 @@ private fun extra(text: String) = if (text.isNotBlank()) "\nZusätzliche Hinweis
 @Composable
 private fun SendButton(icon: ImageVector, label: String, enabled: Boolean, size: Dp = 36.dp, onClick: () -> Unit) {
     Box(
-        Modifier.size(size).clip(CircleShape).background(if (enabled) FK.Accent else FK.Surface3).clickable(enabled = enabled, onClick = onClick),
+        Modifier.size(size).clip(CircleShape).background(if (enabled) FK.Text else FK.Surface3).clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) { Icon(icon, label, tint = androidx.compose.ui.graphics.Color.White, modifier = Modifier.size(18.dp)) }
+    ) { Icon(icon, label, tint = if (enabled) FK.Bg else FK.Muted, modifier = Modifier.size(18.dp)) }
 }
 
 @Composable

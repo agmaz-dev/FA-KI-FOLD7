@@ -14,28 +14,28 @@ import de.foldki.app.R
 
 /** Design tokens of the Fold KI design (from 4.0: dark, Apple-like – black, grey groups, blue accent, green switches). */
 object FK {
-    val Bg = Color(0xFF0D111A)
-    val Surface = Color(0xFF181F2C)
-    val Surface2 = Color(0xFF232D3D)
-    val Surface3 = Color(0xFF303D50)
-    val Line = Color(0xFF303A4A)
+    val Bg = Color(0xFF0A0A0C)
+    val Surface = Color(0xFF131315)
+    val Surface2 = Color(0xFF1C1C20)
+    val Surface3 = Color(0xFF2A2A30)
+    val Line = Color(0xFF29282E)
     val Text = Color(0xFFFFFFFF)
-    val Muted = Color(0xFF929EB1)
-    val Dim = Color(0xFF697586)
-    val Accent = Color(0xFF528AFF)
-    val AccentSoft = Color(0x2E528AFF)
+    val Muted = Color(0xFF95939E)
+    val Dim = Color(0xFF77747F)
+    val Accent = Color(0xFF8060F5)
+    val AccentSoft = Color(0x2E8060F5)
     val OnAccent = Color(0xFFFFFFFF)
     val Ok = Color(0xFF32BF8A)
     val OkSoft = Color(0x2930D158)
     val Warn = Color(0xFFFF9F0A)
     val Danger = Color(0xFFFF453A)
     val Purple = Color(0xFFBF5AF2)
-    val Side = Color(0xFF181F2C)
+    val Side = Color(0xFF131315)
     val Scrim = Color(0x99000000)
 
     // Icon tiles (ab 4.9): one calm grey for every symbol – blue only marks what is active or can be tapped.
     // Ten colours side by side made the menus look restless (feedback of the user).
-    private val TileBg = Color(0xFF303D50)
+    private val TileBg = Color(0xFF2A2A30)
     private val TileFg = Color(0xFFE5E5EA)
     val T1 = TileBg to TileFg
     val T2 = TileBg to TileFg

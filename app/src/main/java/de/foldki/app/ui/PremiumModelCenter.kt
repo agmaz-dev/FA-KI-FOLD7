@@ -45,12 +45,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private data class MP(val bg: Color, val card: Color, val text: Color, val muted: Color) {
-    val blue = Color(0xFF528AFF)
+    val blue = Color(0xFF8060F5)
     val green = Color(0xFF32BF8A)
     val line = muted.copy(alpha = .22f)
 }
-private val DarkMP = MP(Color(0xFF0D111A), Color(0xFF181F2C), Color(0xFFF2F5FA), Color(0xFF929EB1))
-private val LightMP = MP(Color(0xFFF2F4F8), Color.White, Color(0xFF192334), Color(0xFF697586))
+private val DarkMP = MP(Color(0xFF0A0A0C), Color(0xFF131315), Color(0xFFF4F3F6), Color(0xFF95939E))
+private val LightMP = MP(Color(0xFFF6F5F7), Color.White, Color(0xFF222126), Color(0xFF77747F))
 private val Palette = staticCompositionLocalOf { DarkMP }
 
 @Composable private fun MText(s: String, size: Int = 14, muted: Boolean = false, bold: Boolean = false, modifier: Modifier = Modifier, color: Color? = null) {
@@ -59,7 +59,7 @@ private val Palette = staticCompositionLocalOf { DarkMP }
 }
 @Composable private fun MCard(modifier: Modifier = Modifier, active: Boolean = false, content: @Composable ColumnScope.() -> Unit) {
     val p = Palette.current; val shape = RoundedCornerShape(16.dp)
-    Column(modifier.fillMaxWidth().clip(shape).background(p.card).then(if (active) Modifier.border(1.dp, p.blue.copy(alpha=.65f), shape) else Modifier).padding(16.dp), verticalArrangement=Arrangement.spacedBy(10.dp), content=content)
+    Column(modifier.fillMaxWidth().clip(shape).background(p.card).then(if (active) Modifier.border(1.dp, p.blue.copy(alpha=.65f), shape) else Modifier).padding(8.dp), verticalArrangement=Arrangement.spacedBy(5.dp), content=content)
 }
 @Composable private fun MButton(label: String, modifier: Modifier = Modifier, filled: Boolean = true, enabled: Boolean = true, action: () -> Unit) {
     val p=Palette.current
@@ -70,7 +70,7 @@ private val Palette = staticCompositionLocalOf { DarkMP }
     val p=Palette.current
     Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(p.card).clickable(onClick=action),contentAlignment=Alignment.Center) { Icon(icon,label,tint=p.blue,modifier=Modifier.size(20.dp)) }
 }
-@Composable private fun MLogo(vendor: String, size: Int=44) {
+@Composable private fun MLogo(vendor: String, size: Int=28) {
     val c=when(vendor.lowercase()) { "google" -> Color(0xFF4285F4); "alibaba" -> Color(0xFF9471EC); "openai" -> Color(0xFF2CAE91); else -> Palette.current.blue }
     Box(Modifier.size(size.dp).clip(RoundedCornerShape(12.dp)).background(c.copy(alpha=.15f)),contentAlignment=Alignment.Center) { Text(vendor.take(1).uppercase(),color=c,fontWeight=FontWeight.Bold,fontSize=(size*.46).sp) }
 }
@@ -88,18 +88,18 @@ private val Palette = staticCompositionLocalOf { DarkMP }
         if(value.isNotEmpty()) Icon(Icons.Default.Close,"Leeren",tint=p.muted,modifier=Modifier.size(20.dp).clickable{change("")})
     }
 }
-@Composable private fun MTitle(s:String) { MText(s,26,bold=true) }
-@Composable private fun MProgress(f:Float) { val p=Palette.current; LinearProgressIndicator(progress={f.coerceIn(0f,1f)},modifier=Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(8.dp)),color=p.blue,trackColor=p.line) }
-private fun modelVendor(s:String)=if(s.contains("gpt-oss",true)) "OpenAI" else HfModels.vendorOf(s)
+@Composable private fun MTitle(s:String) { MText(s,18,bold=true) }
+@Composable private fun MProgress(f:Float) { val p=Palette.current; LinearProgressIndicator(progress={f.coerceIn(0f,1f)},modifier=Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(8.dp)),color=p.blue,trackColor=p.line) }
+private fun modelVendor(s:String)=if(s.contains("deepseek",true)) "DeepSeek" else if(s.contains("gpt-oss",true)) "OpenAI" else HfModels.vendorOf(s)
 private fun modelFormat(file:String)=if(HfModels.isGguf(file)) "GGUF · llama.cpp" else "LiteRT-LM"
 private fun modelTitle(m:LocalModelManager.LocalModel)=HfModels.prettyName(m.name)
 
 @Composable
-fun PremiumModelCenter(vm:ChatViewModel,ui:UiState,initialDiscover:Boolean,onBack:()->Unit,onNano:()->Unit,onServer:()->Unit) {
+fun PremiumModelCenter(vm:ChatViewModel,ui:UiState,initialDiscover:Boolean,onBack:()->Unit,onNano:()->Unit,onServer:()->Unit,initialDownloads:Boolean=false,workspace:Boolean=false) {
     val context=LocalContext.current
     val prefs=remember { context.getSharedPreferences("model_design",Context.MODE_PRIVATE) }
     var dark by rememberSaveable { mutableStateOf(prefs.getBoolean("dark",true)) }
-    var page by rememberSaveable(initialDiscover) { mutableStateOf(if(initialDiscover) "Entdecken" else "Meine Modelle") }
+    var page by rememberSaveable(initialDiscover,initialDownloads) { mutableStateOf(if(initialDownloads) "Downloads" else if(initialDiscover) "Entdecken" else "Meine Modelle") }
     var repo by rememberSaveable { mutableStateOf("") }
     var installed by rememberSaveable { mutableStateOf("") }
     var delete by remember { mutableStateOf<LocalModelManager.LocalModel?>(null) }
@@ -114,21 +114,20 @@ fun PremiumModelCenter(vm:ChatViewModel,ui:UiState,initialDiscover:Boolean,onBac
     CompositionLocalProvider(Palette provides if(dark) DarkMP else LightMP) {
         val p=Palette.current
         MaterialTheme(colorScheme=if(dark) darkColorScheme(primary=p.blue,background=p.bg,surface=p.card,onSurface=p.text) else lightColorScheme(primary=p.blue,background=p.bg,surface=p.card,onSurface=p.text)) {
-            Column(Modifier.fillMaxSize().background(p.bg).statusBarsPadding().navigationBarsPadding().imePadding().padding(12.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-                    MIcon(Icons.AutoMirrored.Filled.ArrowBack,"Zurück"){back()}
-                    Spacer(Modifier.weight(1f)); MText("FA KI",16,bold=true); Spacer(Modifier.weight(1f))
-                    MIcon(if(dark) Icons.Default.LightMode else Icons.Default.DarkMode,"Darstellung"){dark=!dark;prefs.edit().putBoolean("dark",dark).apply()}
-                    Spacer(Modifier.width(8.dp)); MIcon(Icons.Default.Add,"Importieren"){page="Importieren"}
-                }
-                Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)) {
-                    listOf("Meine Modelle","Entdecken","Downloads","Modelldetails","Konfiguration","Importieren").forEach { t ->
-                        MButton(t,filled=page==t){ if(t=="Modelldetails"){repo="";installed=ui.activeLocal?.file.orEmpty()};if(t=="Konfiguration")installed=ui.activeLocal?.file.orEmpty();page=t }
+            Column(Modifier.fillMaxSize().background(p.bg).statusBarsPadding().navigationBarsPadding().imePadding().padding(12.dp),verticalArrangement=Arrangement.spacedBy(6.dp)) {
+                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                    if(!workspace || page in listOf("Modelldetails","Konfiguration","Hugging Face")) MIcon(Icons.AutoMirrored.Filled.ArrowBack,"Zurück"){back()}
+                    Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+                        val tabs = if(initialDownloads) listOf("Downloads") else if(workspace) listOf("Meine Modelle","Entdecken","Importieren") else listOf("Meine Modelle","Entdecken","Downloads","Importieren")
+                        tabs.forEach { t ->
+                            Text(if(t=="Meine Modelle") "Installiert" else t, color=if(page==t)p.blue else p.muted, fontSize=13.sp, modifier=Modifier.clip(RoundedCornerShape(8.dp)).background(if(page==t)p.blue.copy(alpha=.13f) else Color.Transparent).clickable{page=t}.padding(horizontal=10.dp,vertical=12.dp))
+                        }
                     }
+                    MIcon(if(dark) Icons.Default.LightMode else Icons.Default.DarkMode,"Darstellung"){dark=!dark;prefs.edit().putBoolean("dark",dark).apply()}
                 }
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when(page) {
-                        "Meine Modelle" -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                        "Meine Modelle" -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(6.dp)) {
                             MTitle("Meine Modelle")
                             val used=ui.localModels.sumOf{it.size}; val free=remember(ui.localModels,ui.modelOp){vm.models.freeBytes()}
                             MCard {
@@ -136,19 +135,19 @@ fun PremiumModelCenter(vm:ChatViewModel,ui:UiState,initialDiscover:Boolean,onBac
                                 if(used+free>0) MProgress(used.toFloat()/(used+free))
                                 MText("Frei: "+LocalModelManager.gb(free),12,true)
                             }
-                            if(busy) MButton("Download / Import anzeigen",Modifier.fillMaxWidth(),false){page="Downloads"}
+                            if(busy && !workspace) MButton("Download / Import anzeigen",Modifier.fillMaxWidth(),false){page="Downloads"}
                             ui.activeLocal?.let{m-> MText("Aktives Modell",12,true); InstalledCard(vm,ui,m,true,{openDetails(m)},{openConfig(m)},{delete=m})}
                             if(ui.localModels.any{it.file!=ui.activeModel}) MText("Installierte Modelle",12,true)
                             ui.localModels.filter{it.file!=ui.activeModel}.forEach{m->InstalledCard(vm,ui,m,false,{openDetails(m)},{openConfig(m)},{delete=m})}
                             MCard(active=ui.usesNano) { Row(verticalAlignment=Alignment.CenterVertically){MLogo("Google");Spacer(Modifier.width(10.dp));Column(Modifier.weight(1f)){MText("Gemini Nano",16,bold=true);MText(if(ui.nanoReady) "Android AICore · bereit" else ui.nanoStatus,12,true)};MButton(if(ui.usesNano)"Details" else "Aktivieren"){vm.selectModel(Settings.NANO);onNano()}} }
-                            MCard(Modifier.clickable{page="Entdecken"}) { Row(verticalAlignment=Alignment.CenterVertically){Icon(Icons.Default.AddCircle,null,tint=p.blue);Spacer(Modifier.width(8.dp));MText("Weitere Modelle hinzufügen",modifier=Modifier.weight(1f));Icon(Icons.Default.ChevronRight,null,tint=p.muted)} }
+
                         }
                         "Entdecken" -> DiscoverPage(ui,{repo=it;installed="";page="Modelldetails"},{page="Hugging Face"})
                         "Hugging Face" -> WebMode(vm,{repo=it;installed="";page="Modelldetails"},{page="Entdecken"})
                         "Modelldetails" -> if(repo.isNotBlank()) RemoteDetails(vm,ui,repo){page="Downloads"} else {
                             val m=ui.localModels.firstOrNull{it.file==installed}
                             if(m==null) Column { MTitle("Modelldetails");MText("Wähle zuerst ein Modell.",14,true);MButton("Meine Modelle"){page="Meine Modelle"} }
-                            else Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                            else Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(6.dp)) {
                                 MTitle("Modelldetails"); MCard { Row(verticalAlignment=Alignment.CenterVertically){MLogo(modelVendor(m.file),64);Spacer(Modifier.width(12.dp));Column{MText(modelTitle(m),20,bold=true);MText(modelFormat(m.file),12,true)}};MText(m.file,12,true);MText(LocalModelManager.gb(m.size),20,bold=true);MText("Quelle: "+m.source,13,true);MText("RAM-Einschätzung: "+HfModels.fitText(vm.models.totalRam(),m.size).first,12,true) }
                                 MButton("Modell konfigurieren",Modifier.fillMaxWidth()){openConfig(m)}
                                 MButton("Aktivieren",Modifier.fillMaxWidth(),false){vm.selectModel(m.file);page="Meine Modelle"}
@@ -157,22 +156,17 @@ fun PremiumModelCenter(vm:ChatViewModel,ui:UiState,initialDiscover:Boolean,onBac
                         }
                         "Downloads" -> DownloadPage(vm,ui){page="Entdecken"}
                         "Konfiguration" -> { val m=ui.localModels.firstOrNull{it.file==installed};if(m==null) Column{MTitle("Konfiguration");MText("Wähle ein installiertes Modell.",14,true);MButton("Meine Modelle"){page="Meine Modelle"}} else ConfigPage(vm,m){page="Meine Modelle"} }
-                        "Importieren" -> Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                        "Importieren" -> Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(6.dp)) {
                             MTitle("Modell hinzufügen");MText("Wähle die Quelle deines KI-Modells.",14,true)
                             ImportCard(Icons.Default.FolderOpen,"Lokale Datei","GGUF oder LiteRT-LM vom Gerätespeicher"){if(!busy)pick.launch(arrayOf("*/*")) else vm.notify("Ein Vorgang läuft bereits.")}
-                            ImportCard(Icons.Default.Public,"Hugging Face","Modelle online suchen und auswählen"){page="Entdecken"}
+
                             MCard { MText("Download-Link",16,bold=true); MSearch(url,{url=it;linkError=""},"Hugging-Face-URL");if(linkError.isNotBlank())MText(linkError,12,true)
                                 MButton("Link öffnen",Modifier.fillMaxWidth()){val id=HfModels.repoFromUrl(url.trim());if(id==null)linkError="Bitte einen gültigen Hugging-Face-Modell-Link eingeben." else{repo=id;page="Modelldetails"}} }
-                            ImportCard(Icons.Default.Dns,"PC-Server","Verbindung zu einer externen KI-Engine"){onServer()}
+                            if(!workspace) ImportCard(Icons.Default.Dns,"PC-Server","Verbindung zu einer externen KI-Engine"){onServer()}
                         }
                     }
                 }
-                HorizontalDivider(color=p.line)
-                Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
-                    listOf(Triple("Meine Modelle","Modelle",Icons.Default.Memory),Triple("Entdecken","Entdecken",Icons.Default.Explore),Triple("Downloads","Downloads",Icons.Default.Download),Triple("Konfiguration","Setup",Icons.Default.Tune)).forEach{(key,label,icon)->
-                        Column(Modifier.weight(1f).clickable{if(key=="Konfiguration")installed=ui.activeLocal?.file.orEmpty();page=key}.padding(vertical=4.dp),horizontalAlignment=Alignment.CenterHorizontally){Icon(icon,label,tint=if(page==key)p.blue else p.muted);MText(label,11,color=if(page==key)p.blue else p.muted)}
-                    }
-                }
+
             }
             delete?.let{m->AlertDialog(onDismissRequest={delete=null},title={Text("Modell löschen?")},text={Text(m.name+" wird vom Gerät entfernt.")},confirmButton={TextButton({vm.deleteModel(m.file);delete=null;page="Meine Modelle"}){Text("Löschen")}},dismissButton={TextButton({delete=null}){Text("Abbrechen")}})}
         }
@@ -196,13 +190,13 @@ fun PremiumModelCenter(vm:ChatViewModel,ui:UiState,initialDiscover:Boolean,onBac
     var query by rememberSaveable{mutableStateOf("")};var filter by rememberSaveable{mutableStateOf("Alle")};var format by rememberSaveable{mutableStateOf("LiteRT-LM")}
     var repos by remember{mutableStateOf<List<HfModels.Repo>?>(null)};var error by remember{mutableStateOf("")};var refresh by remember{mutableIntStateOf(0)}
     LaunchedEffect(format,query,refresh){if(format=="GGUF")kotlinx.coroutines.delay(350);repos=null;error="";try{repos=withContext(Dispatchers.IO){if(format=="GGUF")HfModels.fetchGguf("downloads",query)else HfModels.fetchOfficial()}}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(e:Exception){error=e.message.orEmpty()}}
-    Column(Modifier.fillMaxSize(),verticalArrangement=Arrangement.spacedBy(10.dp)){
-        MTitle("Modelle entdecken");MSearch(query,{query=it},"Modell oder Hersteller suchen …")
-        Row(horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("LiteRT-LM","GGUF").forEach{MButton(it,Modifier.weight(1f),filled=format==it){format=it}}}
-        Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(5.dp)){listOf("Alle","Bilder","Denken","Werkzeuge","Klein").forEach{MButton(it,filled=filter==it){filter=it}}}
+    Column(Modifier.fillMaxSize(),verticalArrangement=Arrangement.spacedBy(5.dp)){
+        MSearch(query,{query=it},"Modell oder Hersteller suchen …")
+        Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){listOf("LiteRT-LM","GGUF").forEach{t-> Text(t,color=if(format==t)p.blue else p.muted,fontSize=13.sp,modifier=Modifier.clickable{format=t}.padding(8.dp))}}
+        Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(5.dp)){listOf("Alle","Bilder","Denken","Werkzeuge","Klein").forEach{t->Text(t,color=if(filter==t)p.blue else p.muted,fontSize=12.sp,modifier=Modifier.clickable{filter=t}.padding(8.dp))}}
         Row(verticalAlignment=Alignment.CenterVertically){MText("Hugging Face · Modellkatalog",12,true,modifier=Modifier.weight(1f));MButton("Website",filled=false,action=browser)}
-        val shown=repos.orEmpty().filter{r-> (query.isBlank()||format=="GGUF"||(r.name+" "+modelVendor(r.id)).contains(query,true))&&(filter=="Alle"||filter in r.features||(filter=="Klein"&&(r.parameter.endsWith("M")||r.parameter.dropLast(1).toDoubleOrNull()?.let{it<=2}==true)))}
-        when{error.isNotBlank()->MCard{MText(error,14,true);MButton("Erneut versuchen"){refresh++}};repos==null->Box(Modifier.fillMaxWidth().padding(24.dp),contentAlignment=Alignment.Center){CircularProgressIndicator(color=p.blue)};shown.isEmpty()->MText("Keine passenden Modelle.",14,true);else->LazyColumn(verticalArrangement=Arrangement.spacedBy(10.dp)){items(shown,key={it.id}){r->MCard(Modifier.clickable{details(r.id)}){Row(verticalAlignment=Alignment.CenterVertically){MLogo(modelVendor(r.id));Spacer(Modifier.width(10.dp));Column(Modifier.weight(1f)){MText(HfModels.prettyName(r.name),16,bold=true);MText(modelVendor(r.id)+" · "+format,12,true);MText(r.downloads.toString()+" Downloads · Dateigröße in Details",11,true)};Icon(Icons.Default.ChevronRight,null,tint=p.muted)};MTags(r.features+listOfNotNull(r.parameter.takeIf{it.isNotBlank()})+if(r.usableFiles.any{f->ui.localModels.any{it.file==f.substringAfterLast('/')}})listOf("Installiert")else emptyList())}}}}
+        val shown=repos.orEmpty().filter{r-> !Regex("embed|parakeet|whisper|speech|rerank|wav2vec|moonshine|kokoro|piper",RegexOption.IGNORE_CASE).containsMatchIn(r.id) && (query.isBlank()||format=="GGUF"||(r.name+" "+modelVendor(r.id)).contains(query,true))&&(filter=="Alle"||filter in r.features||(filter=="Klein"&&(r.parameter.endsWith("M")||r.parameter.dropLast(1).toDoubleOrNull()?.let{it<=2}==true)))}
+        when{error.isNotBlank()->MCard{MText(error,14,true);MButton("Erneut versuchen"){refresh++}};repos==null->Box(Modifier.fillMaxWidth().padding(24.dp),contentAlignment=Alignment.Center){CircularProgressIndicator(color=p.blue)};shown.isEmpty()->MText("Keine passenden Modelle.",14,true);else->LazyColumn(verticalArrangement=Arrangement.spacedBy(5.dp)){items(shown,key={it.id}){r->MCard(Modifier.clickable{details(r.id)}){Row(verticalAlignment=Alignment.CenterVertically){MLogo(modelVendor(r.id));Spacer(Modifier.width(10.dp));Column(Modifier.weight(1f)){MText(HfModels.prettyName(r.name),16,bold=true);MText(modelVendor(r.id)+" · "+format,12,true);MText(r.downloads.toString()+" Downloads · Dateigröße in Details",11,true)};Icon(Icons.Default.ChevronRight,null,tint=p.muted)};MTags(r.features+listOfNotNull(r.parameter.takeIf{it.isNotBlank()})+if(r.usableFiles.any{f->ui.localModels.any{it.file==f.substringAfterLast('/')}})listOf("Installiert")else emptyList())}}}}
     }
 }
 
@@ -210,7 +204,7 @@ fun PremiumModelCenter(vm:ChatViewModel,ui:UiState,initialDiscover:Boolean,onBac
     val p=Palette.current;var r by remember(id){mutableStateOf<HfModels.Repo?>(null)};var files by remember(id){mutableStateOf<List<HfModels.LmFile>>(emptyList())};var error by remember(id){mutableStateOf("")};var selected by rememberSaveable(id){mutableStateOf("")};var warn by remember{mutableStateOf<HfModels.LmFile?>(null)};var description by remember(id){mutableStateOf("")}
     LaunchedEffect(id){try{val x=withContext(Dispatchers.IO){HfModels.fetchRepo(id) to HfModels.fetchFiles(id)};r=x.first;files=x.second.filter{it.usable};if(selected.isBlank())selected=HfModels.recommend(files)?.path.orEmpty();description=withContext(Dispatchers.IO){HfModels.fetchReadme(id)}}catch(e:kotlinx.coroutines.CancellationException){throw e}catch(e:Exception){error=e.message.orEmpty()}}
     val f=files.firstOrNull{it.path==selected};val ram=remember{vm.models.totalRam()}
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)){
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(6.dp)){
         MTitle("Modelldetails")
         MCard{Column(Modifier.fillMaxWidth(),horizontalAlignment=Alignment.CenterHorizontally){MLogo(modelVendor(id),64);Spacer(Modifier.height(8.dp));MText(HfModels.prettyName(id.substringAfter('/')),22,bold=true);MText(modelVendor(id)+" · Lokales Sprachmodell",13,true)};MTags(r?.features.orEmpty());if(f!=null)MText(HfModels.fitText(ram,f.size).first.ifBlank{"Kompatibilität unbekannt"},13,color=p.muted)}
         if(error.isNotBlank())MText(error,14,true) else if(r==null)CircularProgressIndicator(color=p.blue)
@@ -232,7 +226,7 @@ fun PremiumModelCenter(vm:ChatViewModel,ui:UiState,initialDiscover:Boolean,onBac
     val d=st as? State.Downloading
     LaunchedEffect(d?.name){lastBytes=0;lastTime=0;speed=0.0}
     LaunchedEffect(d?.bytes){if(d!=null){val now=android.os.SystemClock.elapsedRealtime();if(lastTime>0&&d.bytes>=lastBytes&&now>lastTime)speed=(d.bytes-lastBytes)*1000.0/(now-lastTime);lastBytes=d.bytes;lastTime=now}}
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)){
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(6.dp)){
         MTitle("Downloads")
         when(st){
             is State.Downloading->MCard{Row(verticalAlignment=Alignment.CenterVertically){Icon(Icons.Default.Download,null,tint=p.blue,modifier=Modifier.size(30.dp));Spacer(Modifier.width(10.dp));Column(Modifier.weight(1f)){MText(HfModels.displayName(st.name),16,bold=true);MText("Download läuft",12,true)};MText(st.pct.toString()+" %",24,bold=true,color=p.blue)};MProgress(st.pct/100f);MText(LocalModelManager.gb(st.bytes)+" von "+(if(st.total>0)LocalModelManager.gb(st.total)else "unbekannt"),12,true);if(speed>0){MText("%.1f MB/s".format(java.util.Locale.GERMANY,speed/1e6),12,true);if(st.total>st.bytes)MText("Restzeit ca. "+((st.total-st.bytes)/speed/60).toInt().coerceAtLeast(1)+" Min.",12,true)};MButton("Abbrechen",Modifier.fillMaxWidth(),false){vm.cancelModelOp()}}
@@ -241,8 +235,7 @@ fun PremiumModelCenter(vm:ChatViewModel,ui:UiState,initialDiscover:Boolean,onBac
             is State.Failed->MCard{MText(st.message,14);MButton("Schließen"){vm.clearModelError()}}
             State.Idle->MCard{Column(Modifier.fillMaxWidth(),horizontalAlignment=Alignment.CenterHorizontally){Icon(Icons.Default.Download,null,tint=p.muted,modifier=Modifier.size(40.dp));Spacer(Modifier.height(10.dp));MText("Keine aktiven Downloads");Spacer(Modifier.height(10.dp));MButton("Modelle entdecken",filled=false,action=discover)}}
         }
-        MText("Abgeschlossen / installiert",12,true)
-        ui.localModels.forEach{m->MCard{Row(verticalAlignment=Alignment.CenterVertically){Icon(Icons.Default.CheckCircle,null,tint=p.green);Spacer(Modifier.width(10.dp));Column{MText(modelTitle(m),16,bold=true);MText(LocalModelManager.gb(m.size)+" · Installiert",12,true)}}}}
+
     }
 }
 
@@ -251,7 +244,7 @@ fun PremiumModelCenter(vm:ChatViewModel,ui:UiState,initialDiscover:Boolean,onBac
     val npuBuilt=remember{de.foldki.app.ai.GgufEngine.npuBuilt(context)}
     var backend by remember(m.file){mutableStateOf(if(gguf&&vm.settings.npu&&npuBuilt&&vm.settings.gemmaBackend!="CPU")"NPU" else vm.settings.gemmaBackend)}
     var ctx by remember(m.file){mutableIntStateOf(start.context)};var temp by remember(m.file){mutableFloatStateOf(start.temperature)};var max by remember(m.file){mutableFloatStateOf(start.maxTokens.toFloat())};var topK by remember(m.file){mutableFloatStateOf(start.topK.toFloat())};var topP by remember(m.file){mutableFloatStateOf(start.topP)};var think by remember(m.file){mutableStateOf(start.think)};var gpu by remember(m.file){mutableFloatStateOf(vm.settings.gpuPercent.toFloat())};var power by remember{mutableStateOf(vm.settings.npuPower)}
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)){
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(6.dp)){
         MTitle("Konfiguration");MText(modelTitle(m),14,true)
         MCard{MText("Hardware",16,bold=true);listOf("GPU","CPU","NPU").forEach{b->val enabled=b!="NPU"||gguf&&npuBuilt;Row(Modifier.fillMaxWidth().clickable(enabled=enabled){backend=b},verticalAlignment=Alignment.CenterVertically){RadioButton(backend==b,{backend=b},enabled=enabled);MText(b+when(b){"GPU"->" – Grafikprozessor";"CPU"->" – Hauptprozessor";else->if(enabled)" – KI-Prozessor" else " – nicht verfügbar"},14,muted=!enabled)}}
             if(!gguf){HorizontalDivider(color=p.line);MText("Kontextfenster",16,bold=true);Row(horizontalArrangement=Arrangement.spacedBy(4.dp)){listOf(0,2048,4096,8192).forEach{n->MButton(if(n==0)"Datei" else (n/1024).toString()+"K",Modifier.weight(1f),ctx==n){ctx=n}}};MText("Höherer Kontext benötigt mehr Arbeitsspeicher.",12,true)}

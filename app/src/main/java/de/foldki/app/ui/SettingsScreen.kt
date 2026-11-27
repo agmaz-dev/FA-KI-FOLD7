@@ -96,7 +96,7 @@ import de.foldki.app.voice.Supertonic
  * Everything is saved when a page or the settings are left.
  */
 @Composable
-fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, onBack: () -> Unit, onMenu: () -> Unit = onBack) {
+fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, onBack: () -> Unit, onMenu: () -> Unit = onBack, workspace: Boolean = false) {
     val chrome = remember { PageChrome() }
     var key by remember { mutableStateOf(vm.settings.apiKey) }
     var model by remember { mutableStateOf(vm.settings.claudeModel) }
@@ -135,12 +135,13 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, on
         "sender" -> "Absender & Unterschrift"; "voice" -> "Stimme & Sprache"; "brief" -> "Tagesstart"
         "system" -> "Systemanweisung"; "memory" -> "Gedächtnis"; "report" -> "Fehlerbericht"
         "server" -> "PC-Server"; "history" -> "Verlauf"; "saved" -> "Verlauf"; "s3" -> "S3-Sicherung"; "compute" -> "Rechnen auf"; "gpu" -> "GPU-Anteil"; "instructions" -> "Meine Anweisungen"; "tools" -> "Werkzeuge"; "mcp" -> "MCP-Werkzeuge"
+        "connections" -> "Verbindungen"
         else -> "Einstellungen"
     }
 
-    if (page == "models" || page == "hf") {
+    if (page == "models" || page == "hf" || page == "downloads") {
         PremiumModelCenter(vm, ui, initialDiscover = page == "hf", onBack = { saveAll(); back() },
-            onNano = { page = "nano" }, onServer = { page = "server" })
+            onNano = { page = "nano" }, onServer = { page = "server" }, initialDownloads = page == "downloads", workspace = workspace)
         return
     }
     Surface(color = FK.Bg, modifier = Modifier.fillMaxSize()) {
@@ -171,7 +172,12 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, on
                 ) {
                   androidx.compose.runtime.CompositionLocalProvider(LocalPageChrome provides chrome) {
                     when (page) {
-                        null -> Overview(vm, ui, key, model, ghToken, stReady, stVoice, rate, system) { page = it }
+                        null -> Overview(vm, ui, key, model, ghToken, stReady, stVoice, rate, system, workspace) { page = it }
+                        "connections" -> Group {
+                            SettingRow("PC-Server", null, onClick = { page = "server" }); GroupDivider()
+                            SettingRow("GitHub", null, onClick = { page = "github" }); GroupDivider()
+                            SettingRow("MCP-Werkzeuge", null, onClick = { page = "mcp" })
+                        }
                         "nano" -> NanoPage(vm, ui)
                         "models" -> ModelSettings(vm, ui, openBrowser = { page = "hf" }, openNano = { page = "nano" })
                                                 "github" -> GitHubPage(vm, ghToken, { ghToken = it })
@@ -201,7 +207,7 @@ fun SettingsScreen(vm: ChatViewModel, ui: UiState, startPage: String? = null, on
 @Composable
 private fun Overview(
     vm: ChatViewModel, ui: UiState, key: String, model: String, ghToken: String, stReady: Boolean,
-    stVoice: String, rate: Float, system: String, open: (String) -> Unit,
+    stVoice: String, rate: Float, system: String, workspace: Boolean, open: (String) -> Unit,
 ) {
     val profiles by vm.profiles.collectAsStateWithLifecycle()
     vm.sigVersion.collectAsStateWithLifecycle().value
@@ -219,7 +225,7 @@ private fun Overview(
         Triple("GPU-Anteil (GGUF)", "${vm.settings.gpuPercent} %", "gpu"),
         Triple("Meine Anweisungen", ui.chatInstructionName, "instructions"),
         Triple("Systemanweisung", if (system.isBlank()) "Standard" else "Eigene", "system")
-    ), open)
+    ).filterNot { workspace && it.third == "models" }, open)
     PremiumSettingsGroup("Stimme & Sprache", Icons.AutoMirrored.Filled.VolumeUp, "Diktat, TTS und Anrufmodus", listOf(
         Triple("Stimme, Diktieren & Anruf", vm.voice.voiceLabel, "voice")
     ), open)
@@ -227,7 +233,7 @@ private fun Overview(
         Triple("Werkzeuge", "Websuche, PDF, MCP, Tagesstart", "tools"),
         Triple("GitHub", if (ghToken.isBlank()) "Nicht verbunden" else "Verbunden", "github"),
         Triple("PC-Server", "${ui.servers.size} Verbindungen", "server")
-    ), open)
+    ).filterNot { workspace && it.third in listOf("github", "server") }, open)
     PremiumSettingsGroup("Dokumente", Icons.Default.Description, "PDF, Briefe und Unterschriften", listOf(
         Triple("Absender & Unterschrift", "${list.size} Profile", "sender")
     ), open)
@@ -236,7 +242,7 @@ private fun Overview(
         Triple("Verlauf & Chats löschen", "${ui.conversations.size} Chats", "history"),
         Triple("S3-Sicherung", if (vm.settings.s3Auto) "An" else "Aus", "s3"),
         Triple("Fehlerbericht", "Diagnose und Protokoll", "report")
-    ), open)
+    ).filterNot { workspace && it.third in listOf("memory", "history") }, open)
     PremiumSettingsGroup("Darstellung", Icons.Default.Settings, "Premium · adaptives Fold-Layout", listOf(
         Triple("Version", version, "")
     ), open)
