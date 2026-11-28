@@ -180,7 +180,8 @@ fun ChatApp(vm: ChatViewModel) {
         if (drawer.targetValue == DrawerValue.Open) { focus.clearFocus(force = true); keyboard?.hide() }
     }
     BoxWithConstraints(Modifier.fillMaxSize().background(FK.Bg)) {
-        val wide = maxWidth >= 600.dp // Fold7 unfolded / tablets: two panes with a draggable divider
+        val workspaceWidth = maxWidth
+        val wide = workspaceWidth >= 600.dp // Fold7 unfolded / tablets: two panes with a draggable divider
         if (wide) {
             var historyOpen by rememberSaveable { mutableStateOf(true) }
             val openPage: (String) -> Unit = { p -> page = p }
@@ -203,7 +204,7 @@ fun ChatApp(vm: ChatViewModel) {
                     }
                 } else {
                     if (historyOpen) {
-                        Box(Modifier.widthIn(min = 170.dp, max = 270.dp).width(maxWidth * .28f).fillMaxHeight()) {
+                        Box(Modifier.widthIn(min = 170.dp, max = 270.dp).width(workspaceWidth * .28f).fillMaxHeight()) {
                             MenuPanel(ui, vm, onPage = openPage, onPicked = {}, onCollapse = { historyOpen = false }, compact = true)
                         }
                     }
