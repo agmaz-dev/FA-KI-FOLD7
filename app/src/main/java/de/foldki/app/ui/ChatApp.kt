@@ -181,74 +181,63 @@ fun ChatApp(vm: ChatViewModel) {
     }
     BoxWithConstraints(Modifier.fillMaxSize().background(FK.Bg)) {
         val workspaceWidth = maxWidth
-        val wide = workspaceWidth >= 600.dp // Fold7 unfolded / tablets: two panes with a draggable divider
-        if (wide) {
-            var historyOpen by rememberSaveable { mutableStateOf(true) }
-            val openPage: (String) -> Unit = { p -> page = p }
-            Row(Modifier.fillMaxSize()) {
-                Column(Modifier.width(48.dp).fillMaxHeight().background(FK.Side).statusBarsPadding().navigationBarsPadding().padding(vertical = 6.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    AppLogo(34.dp)
-                    Spacer(Modifier.height(8.dp))
-                    WorkspaceIcon(Icons.Default.ChatBubbleOutline, "Chat", page == null) { page = null }
-                    WorkspaceIcon(Icons.Default.Memory, "Modelle", page == "models" || page == "hf") { page = "models" }
-                    WorkspaceIcon(Icons.Default.Download, "Downloads", page == "downloads") { page = "downloads" }
-                    WorkspaceIcon(Icons.Default.Dns, "Verbindungen", page == "connections") { page = "connections" }
-                    WorkspaceIcon(Icons.Default.Psychology, "Gedächtnis", page == "memory") { page = "memory" }
-                    Spacer(Modifier.weight(1f))
-                    WorkspaceIcon(Icons.Default.Settings, "Einstellungen", page == "") { page = "" }
+        // Always use the same workspace shell. Width only controls the history pane,
+        // never whether the new navigation is present.
+        val inlineHistory = workspaceWidth >= 510.dp
+        var historyOpen by rememberSaveable { mutableStateOf(true) }
+        var compactHistoryOpen by rememberSaveable { mutableStateOf(false) }
+        val visibleHistory = if (inlineHistory) historyOpen else compactHistoryOpen
+        val openPage: (String) -> Unit = { p -> compactHistoryOpen = false; page = p }
+        Row(Modifier.fillMaxSize()) {
+            Column(Modifier.width(48.dp).fillMaxHeight().background(FK.Side).statusBarsPadding().navigationBarsPadding().padding(vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                AppLogo(34.dp)
+                Spacer(Modifier.height(8.dp))
+                WorkspaceIcon(Icons.Default.ChatBubbleOutline, "Chat", page == null) {
+                    if (page != null) { page = null; compactHistoryOpen = false }
+                    else if (inlineHistory) historyOpen = !historyOpen
+                    else compactHistoryOpen = !compactHistoryOpen
                 }
-                if (showSettings) {
-                    Box(Modifier.weight(1f).fillMaxHeight()) {
-                        key(page) { SettingsScreen(vm, ui, startPage = page!!.ifEmpty { null }, onBack = { page = null }, onMenu = { page = null }, workspace = true) }
+                WorkspaceIcon(Icons.Default.Memory, "Modelle", page == "models" || page == "hf") { openPage("models") }
+                WorkspaceIcon(Icons.Default.Download, "Downloads", page == "downloads") { openPage("downloads") }
+                WorkspaceIcon(Icons.Default.Dns, "Verbindungen", page == "connections") { openPage("connections") }
+                WorkspaceIcon(Icons.Default.Psychology, "Gedächtnis", page == "memory") { openPage("memory") }
+                Spacer(Modifier.weight(1f))
+                WorkspaceIcon(Icons.Default.Settings, "Einstellungen", page == "") { openPage("") }
+            }
+            if (showSettings) {
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    key(page) { SettingsScreen(vm, ui, startPage = page!!.ifEmpty { null }, onBack = { page = null }, onMenu = { page = null }, workspace = true) }
+                }
+            } else {
+                if (visibleHistory && inlineHistory) {
+                    Box(Modifier.widthIn(min = 142.dp, max = 250.dp).width(workspaceWidth * .28f).fillMaxHeight()) {
+                        MenuPanel(ui, vm, onPage = openPage, onPicked = {}, onCollapse = { historyOpen = false }, compact = true)
                     }
-                } else {
-                    if (historyOpen) {
-                        Box(Modifier.widthIn(min = 170.dp, max = 270.dp).width(workspaceWidth * .28f).fillMaxHeight()) {
-                            MenuPanel(ui, vm, onPage = openPage, onPicked = {}, onCollapse = { historyOpen = false }, compact = true)
+                }
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    preview?.let { previewPane(it) } ?: ChatScreen(
+                        ui, vm, showMenu = false, onMenu = {}, onSettings = { openPage("models") },
+                        onInstructions = { openPage("instructions") }, onVoiceSettings = { openPage("voice") },
+                        sidebar = SidebarToggle(visibleHistory) {
+                            if (inlineHistory) historyOpen = !historyOpen else compactHistoryOpen = !compactHistoryOpen
+                        },
+                    )
+                    if (!inlineHistory && compactHistoryOpen) {
+                        Box(Modifier.fillMaxSize().background(FK.Bg.copy(alpha = .75f)).clickable { compactHistoryOpen = false })
+                        Box(Modifier.fillMaxHeight().fillMaxWidth(.86f).background(FK.Side)) {
+                            MenuPanel(ui, vm, onPage = openPage, onPicked = { compactHistoryOpen = false }, onCollapse = { compactHistoryOpen = false }, compact = true)
                         }
-                    }
-                    Box(Modifier.weight(1f).fillMaxHeight()) {
-                        preview?.let { previewPane(it) } ?: ChatScreen(
-                            ui, vm, showMenu = false, onMenu = {}, onSettings = { openPage("models") },
-                            onInstructions = { openPage("instructions") }, onVoiceSettings = { openPage("voice") },
-                            sidebar = SidebarToggle(historyOpen) { historyOpen = !historyOpen },
-                        )
+                        androidx.activity.compose.BackHandler { compactHistoryOpen = false }
                     }
                 }
             }
-        } else {
-            val width = LocalConfiguration.current.screenWidthDp.dp - 70.dp
-            ModalNavigationDrawer(
-                drawerState = drawer,
-                scrimColor = androidx.compose.ui.graphics.Color(0x8C000000),
-                drawerContent = {
-                    ModalDrawerSheet(
-                        drawerContainerColor = FK.Side, drawerShape = androidx.compose.ui.graphics.RectangleShape,
-                        modifier = Modifier.width(width), windowInsets = WindowInsets(0, 0, 0, 0),
-                    ) {
-                        MenuPanel(ui, vm, onPage = { page = it }, onPicked = { scope.launch { drawer.close() } }, onCollapse = null)
-                    }
-                },
-            ) {
-                ChatScreen(ui, vm, showMenu = true, onMenu = { scope.launch { drawer.open() } }, onSettings = { page = "models" }, onInstructions = { page = "instructions" }, onVoiceSettings = { page = "voice" })
-            }
-        }
-
-        // Folded: pages slide in full-screen; ☰ goes back to the menu, ‹ / back gesture to the chat.
-        AnimatedVisibility(
-            visible = showSettings && !wide,
-            enter = slideInHorizontally { it } + fadeIn(),
-            exit = slideOutHorizontally { it } + fadeOut(),
-        ) {
-            SettingsScreen(vm, ui, startPage = page?.ifEmpty { null }, onBack = { page = null }, onMenu = { page = null; scope.launch { drawer.open() } })
         }
 
         // Tagesstart (mock-up 17) as its own page in the morning.
         if (page == null && preview == null) brief?.let { b -> BriefPage(b, onClose = vm::closeBrief, onToggle = vm::toggleOpenItem) }
 
-        // Folded: the PDF preview is a full-screen page on top.
-        if (!wide && page == null) preview?.let { previewPane(it) }
+
     }
 }
 
