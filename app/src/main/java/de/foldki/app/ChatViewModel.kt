@@ -466,13 +466,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         "Es ist kein Modell gewählt. Bitte unter Einstellungen → KI-Modelle ein Modell herunterladen oder auswählen."
 
     /** Loads the chosen local model if needed (max. 10 min; the first GPU start compiles and can take long). null = ready, else the reason (German). */
-    private suspend fun ensureLoaded(): String? {
+    private suspend fun ensureLoaded(requireVision: Boolean = false): String? {
         val file = settings.activeModel
         if (file.isBlank() || file == Settings.NANO) return noModelText()
         if (!models.exists(file)) return "Das gewählte Modell ist nicht mehr auf dem Handy. " + noModelText()
         val f = models.fileOf(file)
         val isGguf = HfModels.isGguf(file)
-        if (!isGguf && llm.loadedPath == f.absolutePath) return null
+        if (!isGguf && llm.loadedPath == f.absolutePath && (!requireVision || llm.visionReady)) return null
         // GGUF: "Auf CPU rechnen" = 0 % on the GPU; the same share as loaded = nothing to do.
         val ggufPct = if (settings.gemmaBackend == "CPU") 0 else settings.gpuPercent
         if (isGguf && gguf.loadedPath == f.absolutePath && gguf.loadedGpu == ggufPct) return null
@@ -498,7 +498,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // Only one engine holds a model: free the other one first.
         if (isGguf) llm.close() else gguf.close()
         val d = if (isGguf) gguf.loadAsync(f.absolutePath, ggufPct)
-            else llm.loadAsync(f.absolutePath, settings.gemmaBackend == "GPU", context = settings.modelParams(file).context)
+            else llm.loadAsync(f.absolutePath, settings.gemmaBackend == "GPU", context = settings.modelParams(file).context, requireVision = requireVision)
         llmBegin(); d.invokeOnCompletion { llmEnd() } // stays guarded until the native load really ends
         return try {
             val b = withTimeoutOrNull(600_000) { d.await() } ?: return "Das Modell lädt zu lange (über 10 Minuten). Bitte nochmal fragen."
@@ -512,13 +512,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Runs [block] with the chosen local model loaded and the crash guard set. Errors are thrown (no other model answers). */
-    private suspend fun <T> withLocal(onHot: (String) -> Unit = {}, block: suspend () -> T): T {
+    private suspend fun <T> withLocal(onHot: (String) -> Unit = {}, requireVision: Boolean = false, block: suspend () -> T): T {
         coolDown(onHot)
         idleJob?.cancel()
         llmBegin()
         llmGenerating = true
         try {
-            ensureLoaded()?.let { throw IllegalStateException(it) }
+            ensureLoaded(requireVision)?.let { throw IllegalStateException(it) }
             return block()
         } finally {
             llmGenerating = false
@@ -942,7 +942,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun send(text: String, voice: Boolean = false, noLimit: Boolean = false) {
         val pendingFiles = _ui.value.pending
-        val prompt = (if (de.foldki.app.ai.TextIntegrity.preserve(text)) text else text.trim()).ifBlank { if (pendingFiles.isNotEmpty()) "Was steht in diesem Dokument? Fasse es kurz zusammen." else "" }
+        val prompt = (if (de.foldki.app.ai.TextIntegrity.preserve(text)) text else text.trim()).ifBlank { if (pendingFiles.any { it.mime.startsWith("image/") }) "Beschreibe das Bild und lies vorhandenen Text." else if (pendingFiles.isNotEmpty()) "Was steht in diesem Dokument? Fasse es kurz zusammen." else "" }
         if (prompt.isEmpty() || _ui.value.generating || _ui.value.importing) return
         // "als PDF bitte": the app makes the PDF from the last answer itself (no model needed).
         if (pendingFiles.isEmpty() && (prompt.length <= 80 || (prompt.length <= 160 && PDF_MAKE.containsMatchIn(prompt))) && !INFO_QUESTION.containsMatchIn(prompt)) {
@@ -1023,8 +1023,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 logSystem = system
                 logHistory = history.size
                 val onHot: (String) -> Unit = { t -> editMessage(conv.id, botMsg.id) { it.copy(text = t) } }
-                val ghTask = !diagnostic && settings.githubEnabled && isGitHubTask(prompt, history)
-                val mcpTask = !diagnostic && mcpReady() && isMcpTask(prompt, history)
+                val imageFiles = history.lastOrNull { it.role == Role.USER && it.attachments.any { a -> a.mime.startsWith("image/") } }?.attachments.orEmpty().filter { it.mime.startsWith("image/") && java.io.File(it.path).isFile }
+                val visionModel = !useNano && _ui.value.activeServer == null && !HfModels.isGguf(act) && Regex("gemma.*(e4b|e2b|3n)", RegexOption.IGNORE_CASE).containsMatchIn(act)
+                val visionImages = if (visionModel) imageFiles.takeLast(1).map { it.path } else emptyList()
+                if (imageFiles.isNotEmpty() && !visionModel) notify("Dieses Modell erhält aktuell nur OCR-Text aus Bildern. Für Bildverständnis Gemma E4B/E2B wählen.")
+                val ghTask = visionImages.isEmpty() && !diagnostic && settings.githubEnabled && isGitHubTask(prompt, history)
+                val mcpTask = visionImages.isEmpty() && !diagnostic && mcpReady() && isMcpTask(prompt, history)
                 if (ghTask || mcpTask) {
                     // Tools (GitHub, own MCP server) with every model except Gemini Nano: LiteRT, GGUF and the PC server.
                     if (useNano || act.isBlank()) {
@@ -1134,9 +1138,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         if (first) { first = false; ggufThink = gguf.thinkOpen }
                         onPiece(it)
                     }
-                } else withLocal(onHot) {
+                } else withLocal(onHot, requireVision = visionImages.isNotEmpty()) {
                     // Everything must fit into the model's context – too much input closes the whole app natively.
-                    val budget = llm.inputBudgetChars - system.length
+                    val budget = (llm.inputBudgetChars - system.length - visionImages.size * 1600).coerceAtLeast(0)
                     val webText = if (web) webFor(prompt, history).take(budget / 4) else ""
                     val turns = history.filter { !it.isError && it.text.isNotBlank() }
                     val last = turns.lastOrNull { it.role == Role.USER } ?: return@withLocal
@@ -1154,7 +1158,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             "Platz ${llm.inputBudgetChars} Zeichen · Anweisung ${system.length} · Frage ${question.length} · " +
                             "Verlauf ${earlier.size} Nachrichten (${earlier.sumOf { it.text.length }} Zeichen)",
                     )
-                    llm.chat(conv.id, system, earlier, question, last.id, botMsg.id, temp, params.topK, params.topP)
+                    llm.chat(conv.id, system, earlier, question, last.id, botMsg.id, temp, params.topK, params.topP, imagePaths = visionImages)
                         .let { f -> if (engineMax > 0) f.take(engineMax) else f }.takeWhile { !stopNow }.collect { onPiece(it) }
                 }
                 de.foldki.app.data.TextTrace.stage(botMsg.id, "05 STREAM_RAW_COMPLETE", raw.toString())

@@ -40,6 +40,8 @@ class LocalEngine(context: Context) {
     @Volatile var backendUsed: String? = null
         private set
     private var loading: Deferred<String>? = null
+    @Volatile var visionReady: Boolean = false
+        private set
 
     /** One turn of the chat history (id = ChatMessage.id, used to recognise the open conversation). */
     data class Turn(val id: String, val user: Boolean, val text: String)
@@ -66,11 +68,11 @@ class LocalEngine(context: Context) {
     val isLoaded: Boolean get() = engine != null
 
     /** Loads [modelPath] (another loaded model is closed first). Returns "GPU" or "CPU". */
-    fun loadAsync(modelPath: String, preferGpu: Boolean, onAttempt: (String) -> Unit = {}, context: Int = 0): Deferred<String> = synchronized(this) {
+    fun loadAsync(modelPath: String, preferGpu: Boolean, onAttempt: (String) -> Unit = {}, context: Int = 0, requireVision: Boolean = false): Deferred<String> = synchronized(this) {
         loading?.takeIf { it.isActive }?.let { return it }
         loadScope.async {
             mutex.withLock {
-                if (engine != null && loadedPath == modelPath) return@withLock backendUsed ?: "CPU"
+                if (engine != null && loadedPath == modelPath && (!requireVision || visionReady)) return@withLock backendUsed ?: "CPU"
                 closeNow()
                 // Qwen files without "gpu" in the name crash on the GPU (memory): blocked before loading.
                 if (preferGpu && GpuGuard.blocked(modelPath)) throw IllegalStateException(GpuGuard.TEXT)
@@ -79,7 +81,8 @@ class LocalEngine(context: Context) {
                 var lastError: Throwable? = null
                 // GPU builds ("gpu" in the name) only run on the GPU – never silently on the CPU.
                 val gpuOnly = preferGpu && HfModels.isGpuFile(modelPath)
-                for (a in attempts(ctx, preferGpu, gpuOnly)) {
+                val candidates = if (requireVision) attempts(ctx, preferGpu, gpuOnly).map { it.copy(vision = true) }.distinct() else attempts(ctx, preferGpu, gpuOnly)
+                for (a in candidates) {
                     onAttempt(a.backend)
                     val e = try {
                         Engine(
@@ -94,7 +97,7 @@ class LocalEngine(context: Context) {
                     } catch (t: Throwable) { lastError = t; continue }
                     try {
                         e.initialize()
-                        engine = e; backendUsed = a.backend; loadedPath = modelPath; contextTokens = a.ctx
+                        engine = e; backendUsed = a.backend; loadedPath = modelPath; contextTokens = a.ctx; visionReady = a.vision
                         if (a != attempts(ctx, preferGpu, gpuOnly).first())
                             de.foldki.app.data.DebugLog.write("Geladen mit Ersatz-Einstellung: ${a.backend} · Kontext ${a.ctx}" + if (a.vision) " · Bildteil GPU" else "")
                         return@withLock a.backend
@@ -115,15 +118,18 @@ class LocalEngine(context: Context) {
      */
     fun chat(
         key: String, system: String, earlier: List<Turn>, question: String, questionId: String, answerId: String, temperature: Double? = null,
-        topK: Int = 0, topP: Float = 0f,
+        topK: Int = 0, topP: Float = 0f, imagePaths: List<String> = emptyList(),
     ): Flow<String> = flow {
         samplerTopK = topK; samplerTopP = topP
         val e = engine ?: throw IllegalStateException("Modell ist nicht geladen.")
         val ids = earlier.map { it.id }
-        val budget = inputBudgetChars
+        check(imagePaths.isEmpty() || visionReady) { "Bildverarbeitung konnte nicht initialisiert werden." }
+        val budget = (inputBudgetChars - imagePaths.size * 768 * 2).coerceAtLeast(0)
+        val contents = if (imagePaths.isEmpty()) null else Contents.of(*(imagePaths.map { Content.ImageFile(it) } + Content.Text(question)).toTypedArray())
+        fun send(c: Conversation): Flow<Message> = if (contents == null) c.sendMessageAsync(question) else c.sendMessageAsync(contents)
         // Reuse the open conversation only while everything still fits into the model's context.
         val probe = de.foldki.app.data.TextTrace.active(answerId)
-        val reuse = !probe && kept != null && keptKey == key && keptSystem == system && keptTemp == temperature && keptIds == ids && keptTurns < MAX_KEPT_TURNS &&
+        val reuse = imagePaths.isEmpty() && !probe && kept != null && keptKey == key && keptSystem == system && keptTemp == temperature && keptIds == ids && keptTurns < MAX_KEPT_TURNS &&
             system.length + keptChars + question.length <= budget
         var conv = if (reuse) kept!! else open(e, system, if (probe) emptyList() else earlier, budget - system.length - question.length, temperature)
             .also { kept = it; keptKey = key; keptSystem = system; keptTemp = temperature; keptTurns = 0 }
@@ -137,13 +143,13 @@ class LocalEngine(context: Context) {
         }
         try {
             try {
-                conv.sendMessageAsync(question).collect { m -> val t = text(m); if (t.isNotEmpty()) { sb.append(t); emit(t) } }
+                send(conv).collect { m -> val t = text(m); if (t.isNotEmpty()) { sb.append(t); emit(t) } }
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException || !reuse || sb.isNotEmpty()) throw t
                 // The open conversation is full or broken: start it fresh once.
                 dropKept()
                 conv = open(e, system, earlier, budget - system.length - question.length, temperature).also { kept = it; keptKey = key; keptSystem = system; keptTemp = temperature; keptTurns = 0 }
-                conv.sendMessageAsync(question).collect { m -> val x = text(m); if (x.isNotEmpty()) { sb.append(x); emit(x) } }
+                send(conv).collect { m -> val x = text(m); if (x.isNotEmpty()) { sb.append(x); emit(x) } }
             }
             done = true
             keptIds = ids + questionId + answerId
@@ -260,7 +266,7 @@ class LocalEngine(context: Context) {
     private fun closeNow() {
         dropKept()
         val e = engine
-        engine = null; backendUsed = null; loadedPath = null
+        engine = null; backendUsed = null; loadedPath = null; visionReady = false
         runCatching { e?.close() }
     }
 
